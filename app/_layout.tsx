@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 import { Slot, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { observeAuthState } from "@/services/auth";
 import { useAuthStore } from "@/stores/authStore";
 import {
@@ -13,7 +16,19 @@ import "../global.css";
 // Register background tasks at module scope (Expo requirement)
 import "@/tasks/geofenceTask";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      gcTime: 1000 * 60 * 60 * 24, // 24 hours — keep cached data for offline
+      staleTime: 1000 * 60, // 1 minute before refetch
+    },
+  },
+});
+
+const asyncStoragePersister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  key: "elephant-query-cache",
+});
 
 // Configure how notifications appear when the app is foregrounded
 configureNotifications();
@@ -57,11 +72,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
 export default function RootLayout() {
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{ persister: asyncStoragePersister }}
+    >
       <AuthGate>
         <StatusBar style="auto" />
         <Slot />
       </AuthGate>
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   );
 }

@@ -6,7 +6,8 @@ import {
   ActivityIndicator,
   Platform,
 } from "react-native";
-import MapView, { Marker, Callout, Region } from "react-native-maps";
+import ClusteredMapView from "react-native-map-clustering";
+import { Marker, Callout, Region } from "react-native-maps";
 import { useRouter } from "expo-router";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { useNearbyPlaces } from "@/hooks/usePlaces";
@@ -14,13 +15,12 @@ import { CATEGORY_CONFIG } from "@/constants/categories";
 import type { Place } from "@/types";
 
 const DEFAULT_DELTA = { latitudeDelta: 0.02, longitudeDelta: 0.02 };
-// Query radius for nearby places in meters
 const MAP_QUERY_RADIUS = 5000;
 
 export default function MapScreen() {
   const { location, isLoading: locationLoading } = useCurrentLocation();
   const router = useRouter();
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<any>(null);
 
   const [mapCenter, setMapCenter] = useState(location);
   const center = mapCenter ?? location;
@@ -70,7 +70,7 @@ export default function MapScreen() {
 
   return (
     <View className="flex-1">
-      <MapView
+      <ClusteredMapView
         ref={mapRef}
         className="flex-1"
         initialRegion={{
@@ -81,6 +81,13 @@ export default function MapScreen() {
         showsMyLocationButton={false}
         onRegionChangeComplete={handleRegionChangeComplete}
         provider={Platform.OS === "android" ? "google" : undefined}
+        clusterColor="#2563eb"
+        clusterTextColor="#fff"
+        clusterFontFamily="System"
+        radius={50}
+        minZoomLevel={0}
+        maxZoomLevel={20}
+        extent={512}
       >
         {(places ?? []).map((place) => (
           <PlaceMarker
@@ -89,7 +96,7 @@ export default function MapScreen() {
             onCalloutPress={() => router.push(`/place/${place.placeId}`)}
           />
         ))}
-      </MapView>
+      </ClusteredMapView>
 
       {/* Recenter button */}
       <TouchableOpacity
