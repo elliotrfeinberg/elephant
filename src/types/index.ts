@@ -60,7 +60,7 @@ export interface PlaceInput {
 export interface NoteInput {
   title: string;
   body: string;
-  rating?: number;
+  rating?: number | null;
   photos?: string[];
   visitedAt?: Date;
 }
