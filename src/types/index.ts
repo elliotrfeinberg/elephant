@@ -21,7 +21,7 @@ export interface Place {
   userId: string;
   name: string;
   address: string;
-  externalPlaceId: string | null; // HERE or Google place ID
+  externalPlaceId: string | null;
   location: GeoPoint;
   geohash: string;
   category: PlaceCategory;
@@ -31,6 +31,8 @@ export interface Place {
   createdAt: Timestamp;
   updatedAt: Timestamp;
   isPublic: boolean;
+  /** UIDs of users this place is shared with */
+  sharedWith: string[];
 }
 
 export interface Note {
@@ -44,6 +46,19 @@ export interface Note {
   visitedAt: Timestamp;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+}
+
+/** A pending share invitation */
+export interface ShareInvite {
+  inviteId: string;
+  placeId: string;
+  placeName: string;
+  fromUserId: string;
+  fromDisplayName: string;
+  toEmail: string;
+  toUserId: string | null; // null until recipient signs up
+  status: "pending" | "accepted" | "declined";
+  createdAt: Timestamp;
 }
 
 // Form input types (before Firestore conversion)

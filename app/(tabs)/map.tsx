@@ -11,6 +11,7 @@ import { Marker, Callout, Region } from "react-native-maps";
 import { useRouter } from "expo-router";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { useNearbyPlaces } from "@/hooks/usePlaces";
+import { useAuthStore } from "@/stores/authStore";
 import { CATEGORY_CONFIG } from "@/constants/categories";
 import type { Place } from "@/types";
 
@@ -19,6 +20,7 @@ const MAP_QUERY_RADIUS = 5000;
 
 export default function MapScreen() {
   const { location, isLoading: locationLoading } = useCurrentLocation();
+  const userId = useAuthStore((s) => s.user?.uid);
   const router = useRouter();
   const mapRef = useRef<any>(null);
 
@@ -93,6 +95,7 @@ export default function MapScreen() {
           <PlaceMarker
             key={place.placeId}
             place={place}
+            isSharedToMe={place.userId !== userId}
             onCalloutPress={() => router.push(`/place/${place.placeId}`)}
           />
         ))}
@@ -125,9 +128,11 @@ export default function MapScreen() {
 
 function PlaceMarker({
   place,
+  isSharedToMe,
   onCalloutPress,
 }: {
   place: Place;
+  isSharedToMe?: boolean;
   onCalloutPress: () => void;
 }) {
   const cat = CATEGORY_CONFIG[place.category];
@@ -143,7 +148,12 @@ function PlaceMarker({
       <View className="items-center">
         <View
           className="w-8 h-8 rounded-full items-center justify-center"
-          style={{ backgroundColor: cat.color }}
+          style={{
+            backgroundColor: cat.color,
+            borderWidth: isSharedToMe ? 2 : 0,
+            borderColor: "#3b82f6",
+            borderStyle: isSharedToMe ? "dashed" : "solid",
+          }}
         >
           <Text className="text-sm">{cat.icon}</Text>
         </View>

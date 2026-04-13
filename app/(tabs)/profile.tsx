@@ -1,8 +1,9 @@
-import { View, Text, TouchableOpacity, Switch, Alert } from "react-native";
+import { View, Text, TouchableOpacity, Switch, Alert, ScrollView } from "react-native";
 import Slider from "@react-native-community/slider";
 import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useGeofencing } from "@/hooks/useGeofencing";
+import { usePendingInvites, useAcceptInvite, useDeclineInvite } from "@/hooks/useSharing";
 import { signOut } from "@/services/auth";
 
 export default function ProfileScreen() {
@@ -21,6 +22,10 @@ export default function ProfileScreen() {
     disableAutoSurfacing,
     refreshGeofences,
   } = useGeofencing();
+
+  const { data: pendingInvites } = usePendingInvites();
+  const acceptInvite = useAcceptInvite();
+  const declineInvite = useDeclineInvite();
 
   async function handleToggleAutoSurfacing(value: boolean) {
     if (value) {
@@ -67,7 +72,7 @@ export default function ProfileScreen() {
   }
 
   return (
-    <View className="flex-1 bg-white px-6 pt-8">
+    <ScrollView className="flex-1 bg-white px-6 pt-8">
       {/* User info */}
       <View className="items-center mb-8">
         <View className="w-20 h-20 rounded-full bg-primary-100 items-center justify-center mb-3">
@@ -78,6 +83,42 @@ export default function ProfileScreen() {
         </Text>
         <Text className="text-sm text-gray-500">{user?.email}</Text>
       </View>
+
+      {/* Pending invites */}
+      {pendingInvites && pendingInvites.length > 0 && (
+        <View className="border-t border-gray-100 pt-6 mb-6">
+          <Text className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-4">
+            Shared With You ({pendingInvites.length})
+          </Text>
+          {pendingInvites.map((invite) => (
+            <View
+              key={invite.inviteId}
+              className="bg-blue-50 rounded-xl p-4 mb-3"
+            >
+              <Text className="text-sm font-medium text-gray-900">
+                {invite.placeName}
+              </Text>
+              <Text className="text-xs text-gray-500 mt-0.5">
+                From {invite.fromDisplayName}
+              </Text>
+              <View className="flex-row gap-2 mt-3">
+                <TouchableOpacity
+                  onPress={() => acceptInvite.mutate(invite.inviteId)}
+                  className="bg-primary-600 rounded-lg px-4 py-2"
+                >
+                  <Text className="text-white text-xs font-medium">Accept</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => declineInvite.mutate(invite.inviteId)}
+                  className="bg-gray-200 rounded-lg px-4 py-2"
+                >
+                  <Text className="text-gray-600 text-xs font-medium">Decline</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
 
       <View className="border-t border-gray-100 pt-6">
         <Text className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-4">
@@ -155,14 +196,12 @@ export default function ProfileScreen() {
         </View>
       </View>
 
-      <View className="flex-1" />
-
       <TouchableOpacity
-        className="border border-red-300 rounded-xl py-4 items-center mb-10"
+        className="border border-red-300 rounded-xl py-4 items-center mt-8 mb-10"
         onPress={handleSignOut}
       >
         <Text className="text-red-600 font-semibold text-base">Sign Out</Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }

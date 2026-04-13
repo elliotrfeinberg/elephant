@@ -11,6 +11,7 @@ import {
 import { useRouter } from "expo-router";
 import { useUserPlaces } from "@/hooks/usePlaces";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
+import { useAuthStore } from "@/stores/authStore";
 import { PlaceCard } from "@/components/places/PlaceCard";
 import { distanceMeters } from "@/utils/geo";
 import { formatDistance } from "@/utils/formatters";
@@ -23,6 +24,7 @@ import {
 export default function PlacesScreen() {
   const { data: places, isLoading, refetch } = useUserPlaces();
   const { location } = useCurrentLocation();
+  const userId = useAuthStore((s) => s.user?.uid);
   const router = useRouter();
 
   const [searchText, setSearchText] = useState("");
@@ -181,6 +183,7 @@ export default function PlacesScreen() {
           <PlaceCard
             place={item}
             onPress={() => router.push(`/place/${item.placeId}`)}
+            isSharedToMe={item.userId !== userId}
             distance={getDistance(
               item.location.latitude,
               item.location.longitude

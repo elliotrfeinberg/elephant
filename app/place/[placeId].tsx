@@ -4,21 +4,27 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
+  Switch,
   Alert,
   ActivityIndicator,
 } from "react-native";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
-import { getPlace } from "@/services/places";
-import { usePlaceNotes, useDeleteNote } from "@/hooks/useNotes";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getPlace, updatePlace } from "@/services/places";
+import { usePlaceNotes } from "@/hooks/useNotes";
 import { useDeletePlace } from "@/hooks/usePlaces";
+import { useAuthStore } from "@/stores/authStore";
 import { NoteCard } from "@/components/notes/NoteCard";
+import { ShareModal } from "@/components/places/ShareModal";
 import { CATEGORY_CONFIG } from "@/constants/categories";
-import { formatDate } from "@/utils/formatters";
 
 export default function PlaceDetailScreen() {
   const { placeId } = useLocalSearchParams<{ placeId: string }>();
   const router = useRouter();
+  const userId = useAuthStore((s) => s.user?.uid);
+  const queryClient = useQueryClient();
+
+  const [shareModalVisible, setShareModalVisible] = useState(false);
 
   const placeQuery = useQuery({
     queryKey: ["place", placeId],
@@ -28,11 +34,12 @@ export default function PlaceDetailScreen() {
 
   const notesQuery = usePlaceNotes(placeId!);
   const deletePlaceMutation = useDeletePlace();
-  const deleteNoteMutation = useDeleteNote(placeId!);
 
   const place = placeQuery.data;
   const notes = notesQuery.data ?? [];
   const cat = place ? CATEGORY_CONFIG[place.category] : null;
+  const isOwner = place?.userId === userId;
+  const isShared = (place?.sharedWith?.length ?? 0) > 0;
 
   function handleDeletePlace() {
     Alert.alert(
@@ -52,15 +59,14 @@ export default function PlaceDetailScreen() {
     );
   }
 
-  function handleDeleteNote(noteId: string) {
-    Alert.alert("Delete Note", "Delete this note?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => deleteNoteMutation.mutate(noteId),
-      },
-    ]);
+  async function handleTogglePublic(value: boolean) {
+    if (!placeId) return;
+    try {
+      await updatePlace(placeId, { isPublic: value });
+      queryClient.invalidateQueries({ queryKey: ["place", placeId] });
+    } catch (e: any) {
+      Alert.alert("Error", e.message ?? "Failed to update.");
+    }
   }
 
   if (placeQuery.isLoading) {
@@ -85,9 +91,16 @@ export default function PlaceDetailScreen() {
         options={{
           title: place.name,
           headerRight: () => (
-            <TouchableOpacity onPress={handleDeletePlace} className="mr-2">
-              <Text className="text-red-500 text-sm">Delete</Text>
-            </TouchableOpacity>
+            <View className="flex-row items-center gap-3 mr-2">
+              <TouchableOpacity onPress={() => setShareModalVisible(true)}>
+                <Text className="text-primary-600 text-sm">Share</Text>
+              </TouchableOpacity>
+              {isOwner && (
+                <TouchableOpacity onPress={handleDeletePlace}>
+                  <Text className="text-red-500 text-sm">Delete</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           ),
         }}
       />
@@ -97,13 +110,21 @@ export default function PlaceDetailScreen() {
           <View className="flex-row items-center mb-2">
             <Text className="text-2xl mr-2">{cat?.icon}</Text>
             <View className="flex-1">
-              <Text className="text-xl font-bold text-gray-900">
-                {place.name}
-              </Text>
+              <View className="flex-row items-center gap-2">
+                <Text className="text-xl font-bold text-gray-900">
+                  {place.name}
+                </Text>
+                {!isOwner && (
+                  <View className="bg-blue-100 rounded-full px-2 py-0.5">
+                    <Text className="text-xs text-blue-700">Shared</Text>
+                  </View>
+                )}
+              </View>
               <Text className="text-sm text-gray-500">{place.address}</Text>
             </View>
           </View>
 
+          {/* Tags */}
           {place.tags.length > 0 && (
             <View className="flex-row flex-wrap gap-1 mt-2">
               {place.tags.map((tag) => (
@@ -114,6 +135,38 @@ export default function PlaceDetailScreen() {
                   <Text className="text-xs text-gray-600">{tag}</Text>
                 </View>
               ))}
+            </View>
+          )}
+
+          {/* Sharing info bar */}
+          {isShared && (
+            <TouchableOpacity
+              onPress={() => setShareModalVisible(true)}
+              className="flex-row items-center mt-3 bg-blue-50 rounded-lg px-3 py-2"
+            >
+              <Text className="text-xs text-blue-700 flex-1">
+                Shared with {place.sharedWith.length} person
+                {place.sharedWith.length !== 1 ? "s" : ""}
+              </Text>
+              <Text className="text-xs text-blue-500">Manage</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Privacy toggle (owner only) */}
+          {isOwner && (
+            <View className="flex-row items-center justify-between mt-3">
+              <View>
+                <Text className="text-sm text-gray-700">Public place</Text>
+                <Text className="text-xs text-gray-400">
+                  Visible to shared users' friends
+                </Text>
+              </View>
+              <Switch
+                value={place.isPublic}
+                onValueChange={handleTogglePublic}
+                trackColor={{ false: "#d1d5db", true: "#93c5fd" }}
+                thumbColor={place.isPublic ? "#2563eb" : "#f4f4f5"}
+              />
             </View>
           )}
         </View>
@@ -167,6 +220,14 @@ export default function PlaceDetailScreen() {
           <Text className="text-white text-2xl font-light">+</Text>
         </TouchableOpacity>
       </View>
+
+      <ShareModal
+        visible={shareModalVisible}
+        onClose={() => setShareModalVisible(false)}
+        placeId={placeId!}
+        placeName={place.name}
+        isOwner={isOwner}
+      />
     </>
   );
 }

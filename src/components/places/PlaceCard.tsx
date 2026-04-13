@@ -7,22 +7,33 @@ interface PlaceCardProps {
   place: Place;
   onPress: () => void;
   distance?: string;
+  /** Whether the current user is NOT the owner (it's shared to them) */
+  isSharedToMe?: boolean;
 }
 
-export function PlaceCard({ place, onPress, distance }: PlaceCardProps) {
+export function PlaceCard({ place, onPress, distance, isSharedToMe }: PlaceCardProps) {
   const cat = CATEGORY_CONFIG[place.category];
 
   return (
     <TouchableOpacity
       onPress={onPress}
-      className="bg-white border border-gray-100 rounded-xl p-4 mb-3"
+      className={`bg-white border rounded-xl p-4 mb-3 ${
+        isSharedToMe ? "border-blue-200" : "border-gray-100"
+      }`}
     >
       <View className="flex-row items-center mb-2">
         <Text className="text-xl mr-2">{cat.icon}</Text>
         <View className="flex-1">
-          <Text className="text-base font-semibold text-gray-900">
-            {place.name}
-          </Text>
+          <View className="flex-row items-center gap-2">
+            <Text className="text-base font-semibold text-gray-900">
+              {place.name}
+            </Text>
+            {isSharedToMe && (
+              <View className="bg-blue-100 rounded-full px-1.5 py-0.5">
+                <Text className="text-[10px] text-blue-700">Shared</Text>
+              </View>
+            )}
+          </View>
           <Text className="text-xs text-gray-500" numberOfLines={1}>
             {place.address}
           </Text>

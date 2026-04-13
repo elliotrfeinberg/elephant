@@ -44,6 +44,7 @@ export async function createPlace(
     createdAt: now,
     updatedAt: now,
     isPublic: false,
+    sharedWith: [],
   };
 
   const docRef = await addDoc(collection(db, PLACES_COL), data);
@@ -60,21 +61,50 @@ export async function getPlace(placeId: string): Promise<Place | null> {
 }
 
 /**
- * Get all places for a user, ordered by most recent note.
+ * Get all places owned by or shared with a user.
  */
 export async function getUserPlaces(userId: string): Promise<Place[]> {
-  const q = query(
+  // Query owned places
+  const ownedQuery = query(
     collection(db, PLACES_COL),
     where("userId", "==", userId),
     orderBy("updatedAt", "desc")
   );
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ placeId: d.id, ...d.data() }) as Place);
+
+  // Query places shared with this user
+  const sharedQuery = query(
+    collection(db, PLACES_COL),
+    where("sharedWith", "array-contains", userId)
+  );
+
+  const [ownedSnap, sharedSnap] = await Promise.all([
+    getDocs(ownedQuery),
+    getDocs(sharedQuery),
+  ]);
+
+  const seen = new Set<string>();
+  const places: Place[] = [];
+
+  for (const d of ownedSnap.docs) {
+    seen.add(d.id);
+    places.push({ placeId: d.id, ...d.data() } as Place);
+  }
+
+  for (const d of sharedSnap.docs) {
+    if (!seen.has(d.id)) {
+      places.push({ placeId: d.id, ...d.data() } as Place);
+    }
+  }
+
+  // Sort by updatedAt descending
+  places.sort((a, b) => b.updatedAt.toMillis() - a.updatedAt.toMillis());
+
+  return places;
 }
 
 /**
  * Get places near a location using geohash range queries.
- * This is the core geo query used by the map view.
+ * Includes both owned and shared places.
  */
 export async function getPlacesNear(
   userId: string,
@@ -83,8 +113,8 @@ export async function getPlacesNear(
 ): Promise<Place[]> {
   const bounds = getGeohashBounds(center, radiusMeters);
 
-  // Fire parallel queries for each geohash range
-  const queryPromises = bounds.map(([start, end]) => {
+  // Query owned places by geohash bounds
+  const ownedPromises = bounds.map(([start, end]) => {
     const q = query(
       collection(db, PLACES_COL),
       where("userId", "==", userId),
@@ -94,13 +124,23 @@ export async function getPlacesNear(
     return getDocs(q);
   });
 
-  const snapshots = await Promise.all(queryPromises);
+  // Also fetch shared places (can't combine array-contains with geohash range,
+  // so we fetch all shared places and post-filter by distance)
+  const sharedQuery = query(
+    collection(db, PLACES_COL),
+    where("sharedWith", "array-contains", userId)
+  );
 
-  // Flatten results and post-filter by actual distance (geohash is a bounding box)
+  const [ownedSnapshots, sharedSnap] = await Promise.all([
+    Promise.all(ownedPromises),
+    getDocs(sharedQuery),
+  ]);
+
   const places: Place[] = [];
   const seen = new Set<string>();
 
-  for (const snap of snapshots) {
+  // Process owned places from geohash queries
+  for (const snap of ownedSnapshots) {
     for (const d of snap.docs) {
       if (seen.has(d.id)) continue;
       seen.add(d.id);
@@ -117,6 +157,22 @@ export async function getPlacesNear(
     }
   }
 
+  // Process shared places (post-filter by distance)
+  for (const d of sharedSnap.docs) {
+    if (seen.has(d.id)) continue;
+    seen.add(d.id);
+
+    const place = { placeId: d.id, ...d.data() } as Place;
+    const point: LatLng = {
+      latitude: place.location.latitude,
+      longitude: place.location.longitude,
+    };
+
+    if (isWithinRadius(center, point, radiusMeters)) {
+      places.push(place);
+    }
+  }
+
   return places;
 }
 
@@ -125,7 +181,7 @@ export async function getPlacesNear(
  */
 export async function updatePlace(
   placeId: string,
-  updates: Partial<Pick<Place, "name" | "address" | "category" | "tags">>
+  updates: Partial<Pick<Place, "name" | "address" | "category" | "tags" | "isPublic">>
 ): Promise<void> {
   await updateDoc(doc(db, PLACES_COL, placeId), {
     ...updates,
