@@ -4,9 +4,19 @@ import { StatusBar } from "expo-status-bar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { observeAuthState } from "@/services/auth";
 import { useAuthStore } from "@/stores/authStore";
+import {
+  configureNotifications,
+  setupNotificationResponseListener,
+} from "@/services/notifications";
 import "../global.css";
 
+// Register background tasks at module scope (Expo requirement)
+import "@/tasks/geofenceTask";
+
 const queryClient = new QueryClient();
+
+// Configure how notifications appear when the app is foregrounded
+configureNotifications();
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading, setUser } = useAuthStore();
@@ -32,8 +42,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }, [user, isLoading, segments, router]);
 
+  // Set up notification tap handler for deep linking
+  useEffect(() => {
+    const cleanup = setupNotificationResponseListener();
+    return cleanup;
+  }, []);
+
   if (isLoading) {
-    return null; // Could add a splash/loading screen here
+    return null;
   }
 
   return <>{children}</>;
