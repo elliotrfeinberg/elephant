@@ -2,12 +2,8 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src",
-    "paths": {
-      "@tennis/ratings": ["../ratings/src/index.ts"]
-    }
+    "rootDir": "./src"
   },
   "include": ["src/**/*"],
-  "exclude": ["dist", "node_modules", "**/*.test.ts"],
-  "references": [{ "path": "../ratings" }]
+  "exclude": ["dist", "node_modules", "**/*.test.ts"]
 }
