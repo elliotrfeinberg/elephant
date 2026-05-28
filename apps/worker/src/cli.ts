@@ -32,6 +32,7 @@ import {
   parsePlayerSearch,
   parseRatingSearch,
   parseRobots,
+  parseTeamSearch,
   playerProfileUrl,
   teamProfileUrl,
   type PlayerPar1Entry,
@@ -41,6 +42,7 @@ import {
   computeRatings,
   labeledRows,
   loadCaptures,
+  loadCapturesMulti,
 } from "@tennis/calibrate";
 import { fitCalibration, glickoToNtrp } from "@tennis/ratings";
 
@@ -146,9 +148,19 @@ async function parse(kind: string, htmlFile: string) {
       );
       break;
     }
+    case "team-search": {
+      const result = parseTeamSearch(html);
+      console.log(JSON.stringify(result, null, 2));
+      console.error(
+        `Parsed ${result.rows.length} team rows from "${result.context ?? "?"}"`
+      );
+      break;
+    }
     default:
       console.error(`Unknown parser kind: ${kind}`);
-      console.error("Available: search, robots, rating-search");
+      console.error(
+        "Available: search, robots, rating-search, team-search"
+      );
       process.exit(2);
   }
 }
@@ -633,14 +645,19 @@ async function browserPostback(
 // fit-quality report; writes calibration.json + ratings.json next to
 // the input.
 async function ratingsFitCmd(
-  aggregatePath: string,
+  aggregatePaths: string[],
   opts: { minMatches: number; labelsPath?: string }
 ) {
-  console.error(`Loading captures from ${aggregatePath}`);
+  if (aggregatePaths.length === 1) {
+    console.error(`Loading captures from ${aggregatePaths[0]}`);
+  } else {
+    console.error(`Loading ${aggregatePaths.length} aggregates (union):`);
+    for (const p of aggregatePaths) console.error(`  ${p}`);
+  }
   if (opts.labelsPath) {
     console.error(`  with year-end labels: ${opts.labelsPath}`);
   }
-  const captures = await loadCaptures(aggregatePath, {
+  const captures = await loadCapturesMulti(aggregatePaths, {
     yearEndLabelsPath: opts.labelsPath,
   });
   console.error(
@@ -705,11 +722,10 @@ async function ratingsFitCmd(
     );
   }
 
-  // Write outputs alongside the aggregate.
-  const outDir = dirname(aggregatePath);
-  const stem = aggregatePath.endsWith(".json")
-    ? aggregatePath.slice(0, -5)
-    : aggregatePath;
+  // Write outputs alongside the first aggregate (the "primary" of a
+  // multi-aggregate union, or the only one in the single-input case).
+  const primary = aggregatePaths[0]!;
+  const stem = primary.endsWith(".json") ? primary.slice(0, -5) : primary;
   const calibPath = `${stem}.calibration.json`;
   const ratingsPath = `${stem}.ratings.json`;
   await writeFile(calibPath, JSON.stringify(calib, null, 2) + "\n", "utf8");
@@ -735,9 +751,63 @@ async function ratingsFitCmd(
     JSON.stringify(ratingsDump, null, 2) + "\n",
     "utf8"
   );
-  void outDir; // silence unused
   console.error(`Wrote ${calibPath}`);
   console.error(`Wrote ${ratingsPath}`);
+}
+
+// Submit the team-search form via Playwright with the given criteria,
+// dump the rendered HTML, and parse it to extract team par1s. Writes
+// both the raw HTML (for fixture purposes) and the parsed JSON.
+async function searchTeamsCmd(opts: {
+  year: number;
+  section: string;
+  division: string;
+  gender: "Male" | "Female" | "Mixed";
+  level?: string;
+  outHtml: string;
+  outJson?: string;
+  extractPar1ForTeamSubstring?: string;
+}) {
+  const session = await loadSession();
+  const browser = new BrowserFetcher({ session });
+  try {
+    console.error(
+      `Searching teams: year=${opts.year} section="${opts.section}" ` +
+        `division="${opts.division}" gender=${opts.gender} ` +
+        `level=${opts.level ?? "(all)"}`
+    );
+    const result = await browser.submitTeamSearch({
+      year: opts.year,
+      section: opts.section,
+      division: opts.division,
+      gender: opts.gender,
+      level: opts.level,
+      extractPar1ForTeamSubstring: opts.extractPar1ForTeamSubstring,
+    });
+    await mkdir(dirname(opts.outHtml), { recursive: true });
+    await writeFile(opts.outHtml, result.body ?? "", "utf8");
+    console.error(`  status=${result.status} bytes=${result.body?.length ?? 0}`);
+    console.error(`  finalUrl=${result.finalUrl}`);
+    console.error(`Wrote ${opts.outHtml}`);
+    const parsed = parseTeamSearch(result.body ?? "");
+    console.error(`Parsed ${parsed.rows.length} teams from results page`);
+    if (opts.outJson) {
+      await mkdir(dirname(opts.outJson), { recursive: true });
+      await writeFile(
+        opts.outJson,
+        JSON.stringify(parsed, null, 2) + "\n",
+        "utf8"
+      );
+      console.error(`Wrote ${opts.outJson}`);
+    }
+    if (result.extractedPar1) {
+      console.error(
+        `\nExtracted par1 for "${result.extractedTeamName}":\n  ${result.extractedPar1}`
+      );
+    }
+  } finally {
+    await browser.close();
+  }
 }
 
 function usage(): never {
@@ -745,13 +815,16 @@ function usage(): never {
   tennis-scrape capture <url> <out-file> [--no-auth]
   tennis-scrape capture-postback <url> <event-target> <out-file>
   tennis-scrape browser-postback <url> <event-target> <out-file>
-  tennis-scrape parse <kind> <html-file>     (kind: search|robots)
+  tennis-scrape parse <kind> <html-file>     (kind: search|robots|rating-search|team-search)
+  tennis-scrape search teams <out-html> --year N --section LABEL --division LABEL --gender Male|Female|Mixed --level LEVEL [--out-json PATH] [--extract-par1-for "team name substring"]
+                       (live Playwright form submit; level required. --extract-par1-for clicks the first matching team row's postback and prints its par1.)
   tennis-scrape robots <host>
   tennis-scrape session init
   tennis-scrape session check [probe-url]
   tennis-scrape crawl team <par1> <year> [--out <dir>]   (default --out: ./captures)
   tennis-scrape crawl subflight <par1> <year> [--out <dir>] [--include-players]
-  tennis-scrape ratings fit <subflight-aggregate.json> [--min-matches N] [--labels <year-end.json>]
+  tennis-scrape ratings fit <subflight-aggregate.json> [<more-aggregates.json>...] [--min-matches N] [--labels <year-end.json>]
+                       (multiple aggregates are unioned: e.g. 3.0 + 3.5 + 4.0 subflights → one fit)
 
 Env:
   TENNIS_CONTACT_EMAIL  email site admins can use to reach you
@@ -798,6 +871,62 @@ async function main() {
         else if (sub === "check") await sessionCheck(rest[0]);
         else usage();
         break;
+      case "search": {
+        if (sub !== "teams") usage();
+        // Required flags: --year, --section, --division, --gender
+        // Optional:       --level, --out-json
+        // Required positional: out-html path
+        // Values are matched by visible-label text (more stable than
+        // composite <option value> tokens), so quote them in the shell.
+        const positional: string[] = [];
+        let year: number | undefined;
+        let section: string | undefined;
+        let division: string | undefined;
+        let gender: "Male" | "Female" | "Mixed" | undefined;
+        let level: string | undefined;
+        let outJson: string | undefined;
+        let extractFor: string | undefined;
+        for (let i = 0; i < rest.length; i++) {
+          const arg = rest[i]!;
+          const next = () => {
+            const n = rest[i + 1];
+            if (!n) usage();
+            i += 1;
+            return n!;
+          };
+          if (arg === "--year") year = Number(next());
+          else if (arg === "--section") section = next();
+          else if (arg === "--division") division = next();
+          else if (arg === "--gender") {
+            const g = next();
+            if (g !== "Male" && g !== "Female" && g !== "Mixed") usage();
+            gender = g;
+          } else if (arg === "--level") level = next();
+          else if (arg === "--out-json") outJson = next();
+          else if (arg === "--extract-par1-for") extractFor = next();
+          else positional.push(arg);
+        }
+        if (
+          positional.length !== 1 ||
+          !year ||
+          !section ||
+          !division ||
+          !gender
+        ) {
+          usage();
+        }
+        await searchTeamsCmd({
+          year: year!,
+          section: section!,
+          division: division!,
+          gender: gender!,
+          level,
+          outHtml: positional[0]!,
+          outJson,
+          extractPar1ForTeamSubstring: extractFor,
+        });
+        break;
+      }
       case "ratings": {
         if (sub !== "fit") usage();
         const positional: string[] = [];
@@ -820,8 +949,8 @@ async function main() {
             positional.push(arg);
           }
         }
-        if (positional.length !== 1) usage();
-        await ratingsFitCmd(positional[0]!, { minMatches, labelsPath });
+        if (positional.length < 1) usage();
+        await ratingsFitCmd(positional, { minMatches, labelsPath });
         break;
       }
       case "crawl": {

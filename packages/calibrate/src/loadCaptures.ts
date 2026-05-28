@@ -299,6 +299,112 @@ export async function loadCaptures(
   };
 }
 
+// Load multiple subflight aggregates and union them into a single
+// CapturesData. This is the multi-flight path: capture a 3.0 women's
+// subflight + 3.5 + 4.0 (same league/section), then fit one Glicko
+// model across all three so the NTRP regression has real range.
+//
+// Merge semantics:
+// - Players are deduped by playerKey (memberId when known, else
+//   normalized name). When the same player appears in multiple
+//   aggregates, we keep their first-seen ntrp/memberId, append any
+//   new team names, and use the larger pool of metadata.
+// - Matches dedup on the existing matchId#line#kind key (a match
+//   that touches two crawled aggregates will appear in both but
+//   only counts once).
+// - The first aggregate's year/ownTeamName/ownTeamId become the
+//   "primary" identity of the returned CapturesData. This is purely
+//   for reporting — Glicko/fit don't read it.
+// - The year-end-label counts are summed across aggregates so the
+//   CLI summary reflects total coverage.
+export async function loadCapturesMulti(
+  aggregatePaths: string[],
+  opts: LoadCapturesOptions = {}
+): Promise<CapturesData> {
+  if (aggregatePaths.length === 0) {
+    throw new Error("loadCapturesMulti: at least one aggregate path required");
+  }
+  if (aggregatePaths.length === 1) {
+    return loadCaptures(aggregatePaths[0]!, opts);
+  }
+  const loaded = await Promise.all(
+    aggregatePaths.map((p) => loadCaptures(p, opts))
+  );
+  return mergeCaptures(loaded);
+}
+
+// Pure merge of multiple CapturesData into one. Exported for tests so
+// we can validate union semantics without touching the filesystem.
+export function mergeCaptures(parts: CapturesData[]): CapturesData {
+  if (parts.length === 0) {
+    throw new Error("mergeCaptures: at least one CapturesData required");
+  }
+  const first = parts[0]!;
+  if (parts.length === 1) return first;
+
+  // Defensive copy of first.players — we mutate teams[] and ntrp on
+  // collisions, and we don't want to leak that into the caller's input.
+  const players = new Map<string, PlayerLabel>();
+  for (const [k, p] of first.players) {
+    players.set(k, { ...p, teams: [...p.teams] });
+  }
+  const matchesByKey = new Map<string, CourtMatch>();
+  for (const m of first.matches) {
+    matchesByKey.set(`${m.matchId}#${m.line}#${m.kind}`, m);
+  }
+  const unresolved = new Set<string>(first.unresolvedNames);
+  let yearEndLabelMatches = first.yearEndLabelMatches;
+  let yearEndLabelOverrides = first.yearEndLabelOverrides;
+  let yearEndUnmatched = first.yearEndUnmatched;
+
+  for (let i = 1; i < parts.length; i++) {
+    const next = parts[i]!;
+    for (const [key, p] of next.players) {
+      const existing = players.get(key);
+      if (existing) {
+        for (const t of p.teams) {
+          if (!existing.teams.includes(t)) existing.teams.push(t);
+        }
+        if (existing.ntrp === undefined && p.ntrp !== undefined) {
+          existing.ntrp = p.ntrp;
+        }
+        if (existing.memberId === undefined && p.memberId !== undefined) {
+          existing.memberId = p.memberId;
+        }
+      } else {
+        players.set(key, { ...p, teams: [...p.teams] });
+      }
+    }
+    for (const m of next.matches) {
+      const k = `${m.matchId}#${m.line}#${m.kind}`;
+      if (!matchesByKey.has(k)) matchesByKey.set(k, m);
+    }
+    for (const n of next.unresolvedNames) unresolved.add(n);
+    yearEndLabelMatches += next.yearEndLabelMatches;
+    yearEndLabelOverrides += next.yearEndLabelOverrides;
+    // yearEndUnmatched is per-aggregate; summing would double-count
+    // when the same dump is loaded for each aggregate. Take the min
+    // (the dump rows that nobody in any aggregate matched).
+    yearEndUnmatched = Math.min(yearEndUnmatched, next.yearEndUnmatched);
+  }
+
+  const matchList = [...matchesByKey.values()].sort(
+    (a, b) => a.date.getTime() - b.date.getTime()
+  );
+
+  return {
+    year: first.year,
+    ownTeamName: first.ownTeamName,
+    ownTeamId: first.ownTeamId,
+    players,
+    matches: matchList,
+    unresolvedNames: [...unresolved],
+    yearEndLabelMatches,
+    yearEndLabelOverrides,
+    yearEndUnmatched,
+  };
+}
+
 // Derive the raw-data directory from the aggregate's path. The
 // aggregate's own `rawDir` field is a relative path written at crawl
 // time and may not resolve if the caller is in a different cwd.

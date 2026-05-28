@@ -47,6 +47,12 @@ export {
 } from "./parseRatingSearch.js";
 
 export {
+  parseTeamSearch,
+  type ParsedTeamSearch,
+  type TeamSearchRow,
+} from "./parseTeamSearch.js";
+
+export {
   parsePlayerSearch,
   type PlayerSearchResultRow,
 } from "./parse.js";

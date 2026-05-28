@@ -1,5 +1,7 @@
 export {
   loadCaptures,
+  loadCapturesMulti,
+  mergeCaptures,
   type CapturesData,
   type CourtMatch,
   type LoadCapturesOptions,
