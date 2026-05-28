@@ -33,8 +33,11 @@ import {
   parseRatingSearch,
   parseRobots,
   parseTeamSearch,
+  parseTennisrecordHistory,
   playerProfileUrl,
   teamProfileUrl,
+  tennisrecordHistoryUrl,
+  type TennisrecordMatchRow,
   type PlayerPar1Entry,
   type UstaSession,
 } from "@tennis/scraper";
@@ -158,10 +161,20 @@ async function parse(kind: string, htmlFile: string) {
       );
       break;
     }
+    case "tr-history": {
+      const result = parseTennisrecordHistory(html);
+      console.log(JSON.stringify(result, null, 2));
+      console.error(
+        `Parsed ${result.rows.length} tennisrecord match rows for ${
+          result.playerName ?? "?"
+        }`
+      );
+      break;
+    }
     default:
       console.error(`Unknown parser kind: ${kind}`);
       console.error(
-        "Available: search, robots, rating-search, team-search"
+        "Available: search, robots, rating-search, team-search, tr-history"
       );
       process.exit(2);
   }
@@ -927,6 +940,184 @@ async function searchTeamsCmd(opts: {
   }
 }
 
+// Fetch tennisrecord match histories for a list of players and
+// aggregate empirical (score → delta) statistics. Used to reverse-
+// engineer the perf-rating table.
+//
+// `aggregatePaths` are subflight aggregate JSON files; we read their
+// rosters to pick player names. `year` selects which year's history
+// to pull per player (e.g. 2025 — must be a completed season to have
+// final match ratings).
+async function tennisrecordAggregateCmd(opts: {
+  aggregatePaths: string[];
+  year: number;
+  outJson: string;
+  maxPlayers: number;
+  minDelayMs: number;
+  maxDelayMs: number;
+}) {
+  // Use the existing captures loader to get rostered player names —
+  // it handles raw-dir derivation and roster aggregation correctly.
+  const captures = await loadCapturesMulti(opts.aggregatePaths);
+  const playerList: Array<{ name: string; teams: string[] }> = [];
+  for (const p of captures.players.values()) {
+    if (!p.name) continue;
+    if (p.teams.length === 0) continue; // skip unresolved scorecard names
+    playerList.push({ name: p.name, teams: p.teams });
+  }
+  console.error(`Found ${playerList.length} unique players across aggregates`);
+  if (playerList.length > opts.maxPlayers) {
+    console.error(`  capped at --max-players=${opts.maxPlayers}`);
+    playerList.length = opts.maxPlayers;
+  }
+
+  // Fetch each player's history (polite). Use anonymous PoliteFetcher.
+  const fetcher = anonFetcher();
+  // Override delays via the fetcher's pacing — re-construct with desired.
+  const politeFetcher = new PoliteFetcher({
+    userAgent: ENV_UA,
+    contactEmail: requireContact(),
+    minDelayMs: opts.minDelayMs,
+    maxDelayMs: opts.maxDelayMs,
+  });
+  void fetcher;
+
+  // Per-player results + global score aggregation.
+  const perPlayer: Array<{
+    player: string;
+    teams: string[];
+    rows: TennisrecordMatchRow[];
+    error?: string;
+  }> = [];
+
+  // Aggregate keyed by canonical sorted "won-lost,won-lost" from
+  // winner's perspective, only counting matches with a non-null
+  // matchRating + opponent rating, and only matches with sets.
+  const scoreStats = new Map<
+    string,
+    {
+      deltas: number[];
+      sample: Array<{
+        player: string;
+        opp: string;
+        oppRating: number;
+        matchRating: number;
+        score: string;
+      }>;
+    }
+  >();
+
+  let i = 0;
+  for (const p of playerList) {
+    i += 1;
+    const url = tennisrecordHistoryUrl(p.name, opts.year);
+    try {
+      const result = await politeFetcher.fetch(url);
+      if (!result.body) {
+        perPlayer.push({ player: p.name, teams: p.teams, rows: [], error: "no body" });
+        continue;
+      }
+      const parsed = parseTennisrecordHistory(result.body);
+      perPlayer.push({ player: p.name, teams: p.teams, rows: parsed.rows });
+      // Aggregate deltas per score.
+      for (const row of parsed.rows) {
+        if (row.matchRating === undefined) continue;
+        if (row.opponents.length === 0) continue;
+        // For doubles, the opponent's rating is the mean of two.
+        const oppRatings = row.opponents
+          .map((o) => o.rating)
+          .filter((r): r is number => r !== undefined);
+        if (oppRatings.length === 0) continue;
+        const oppMean = oppRatings.reduce((a, b) => a + b, 0) / oppRatings.length;
+        // Canonical key from winner's perspective.
+        const winnerSets = row.won
+          ? row.sets
+          : row.sets.map((s) => ({
+              playerGames: s.opponentGames,
+              opponentGames: s.playerGames,
+            }));
+        // Drop matches that we don't understand (no sets parsed).
+        if (winnerSets.length === 0) continue;
+        const sortedSets = [...winnerSets].sort((a, b) => {
+          if (a.playerGames !== b.playerGames)
+            return a.playerGames - b.playerGames;
+          return a.opponentGames - b.opponentGames;
+        });
+        const key = sortedSets
+          .map((s) => `${s.playerGames}-${s.opponentGames}`)
+          .join(",");
+        const delta = row.won
+          ? row.matchRating - oppMean
+          : oppMean - row.matchRating;
+        const entry = scoreStats.get(key) ?? { deltas: [], sample: [] };
+        entry.deltas.push(delta);
+        if (entry.sample.length < 5) {
+          entry.sample.push({
+            player: p.name,
+            opp: row.opponents.map((o) => o.name).join(" + "),
+            oppRating: oppMean,
+            matchRating: row.matchRating,
+            score: key,
+          });
+        }
+        scoreStats.set(key, entry);
+      }
+      console.error(
+        `[${i}/${playerList.length}] ${p.name}: ${parsed.rows.length} matches`
+      );
+    } catch (err) {
+      perPlayer.push({
+        player: p.name,
+        teams: p.teams,
+        rows: [],
+        error: err instanceof Error ? err.message : String(err),
+      });
+      console.error(`[${i}/${playerList.length}] ${p.name}: ERROR ${err}`);
+    }
+  }
+
+  // Summarize per score.
+  const summary = [...scoreStats.entries()]
+    .map(([key, v]) => {
+      const xs = v.deltas;
+      xs.sort((a, b) => a - b);
+      const n = xs.length;
+      const mean = xs.reduce((a, b) => a + b, 0) / n;
+      const median = xs[Math.floor(n / 2)]!;
+      const p10 = xs[Math.floor(n * 0.1)]!;
+      const p90 = xs[Math.floor(n * 0.9)]!;
+      return {
+        score: key,
+        n,
+        mean,
+        median,
+        p10,
+        p90,
+        sample: v.sample,
+      };
+    })
+    .sort((a, b) => b.n - a.n);
+
+  await writeFile(
+    opts.outJson,
+    JSON.stringify(
+      { year: opts.year, perPlayer, summary },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+  console.error(`Wrote ${opts.outJson}`);
+  console.error("Top 15 score patterns by frequency:");
+  for (const s of summary.slice(0, 15)) {
+    console.error(
+      `  ${s.score.padEnd(20)} n=${String(s.n).padEnd(4)} ` +
+        `mean=${s.mean.toFixed(3)} median=${s.median.toFixed(3)} ` +
+        `p10=${s.p10.toFixed(3)} p90=${s.p90.toFixed(3)}`
+    );
+  }
+}
+
 function usage(): never {
   console.error(`Usage:
   tennis-scrape capture <url> <out-file> [--no-auth]
@@ -941,6 +1132,8 @@ function usage(): never {
   tennis-scrape crawl team <par1> <year> [--out <dir>]   (default --out: ./captures)
   tennis-scrape crawl subflight <par1> <year> [--out <dir>] [--include-players]
   tennis-scrape ratings fit <subflight-aggregate.json> [<more-aggregates.json>...] [--min-matches N] [--labels <year-end.json>] [--prior-from-ntrp] [--model glicko|perf]
+  tennis-scrape tennisrecord aggregate <subflight-aggregate.json> [<more-aggregates.json>...] --year YEAR --out OUTPUT.json [--max-players N] [--min-delay MS] [--max-delay MS]
+                       (fetches tennisrecord match histories for rostered players, aggregates empirical score → perf-delta stats; polite delays default 2000–4000 ms)
                        (--prior-from-ntrp seeds initial Glicko per player from their NTRP band — required for multi-band fits across disjoint subflights, otherwise the bands collapse to one prior)
                        (--model perf uses USTA-style per-match performance ratings on the NTRP scale; score margin matters and the disjoint-cluster problem doesn't apply)
                        (multiple aggregates are unioned: e.g. 3.0 + 3.5 + 4.0 subflights → one fit)
@@ -1083,6 +1276,47 @@ async function main() {
           labelsPath,
           priorFromNtrp,
           model,
+        });
+        break;
+      }
+      case "tennisrecord": {
+        if (sub !== "aggregate") usage();
+        const positional: string[] = [];
+        let year: number | undefined;
+        let outJson: string | undefined;
+        let maxPlayers = 999_999;
+        let minDelayMs = 2000;
+        let maxDelayMs = 4000;
+        for (let i = 0; i < rest.length; i++) {
+          const arg = rest[i]!;
+          const next = () => {
+            const n = rest[i + 1];
+            if (!n) usage();
+            i += 1;
+            return n!;
+          };
+          if (arg === "--year") year = Number(next());
+          else if (arg === "--out") outJson = next();
+          else if (arg === "--max-players") maxPlayers = Number(next());
+          else if (arg === "--min-delay") minDelayMs = Number(next());
+          else if (arg === "--max-delay") maxDelayMs = Number(next());
+          else positional.push(arg);
+        }
+        if (
+          positional.length < 1 ||
+          !year ||
+          !outJson ||
+          !Number.isFinite(maxPlayers)
+        ) {
+          usage();
+        }
+        await tennisrecordAggregateCmd({
+          aggregatePaths: positional,
+          year: year!,
+          outJson: outJson!,
+          maxPlayers,
+          minDelayMs,
+          maxDelayMs,
         });
         break;
       }

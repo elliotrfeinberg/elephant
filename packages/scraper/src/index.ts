@@ -53,6 +53,20 @@ export {
 } from "./parseTeamSearch.js";
 
 export {
+  parseTennisrecordHistory,
+  parseScoreString,
+  type ParsedTennisrecordHistory,
+  type TennisrecordMatchRow,
+  type TennisrecordOpponent,
+  type TennisrecordSet,
+} from "./parseTennisrecordHistory.js";
+
+export {
+  tennisrecordProfileUrl,
+  tennisrecordHistoryUrl,
+} from "./tennisrecordUrl.js";
+
+export {
   parsePlayerSearch,
   type PlayerSearchResultRow,
 } from "./parse.js";
