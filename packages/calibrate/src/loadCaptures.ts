@@ -62,6 +62,12 @@ export interface CourtMatch {
   retired: "home" | "visitor" | undefined;
   // Side that defaulted (didn't play). The other side won by walkover.
   defaulted: "home" | "visitor" | undefined;
+  // Sum of games won across all sets in the match, per side. Undefined
+  // when the scorecard didn't record set scores (e.g. defaulted before
+  // play). The performance-rating model uses these to weigh margin;
+  // Glicko-2 ignores them.
+  gamesHome: number | undefined;
+  gamesVisitor: number | undefined;
 }
 
 export interface CapturesData {
@@ -265,6 +271,19 @@ export async function loadCaptures(
         for (const n of court.visitorPlayers) {
           visitorPlayerKeys.push(resolveName(n, players, unresolved));
         }
+        // Sum games per side across the match's sets. Cap each set at
+        // a reasonable game count so a 10-point match-tiebreak (parsed
+        // as e.g. 10-7) doesn't dominate two normal 6-4 sets.
+        let gh: number | undefined;
+        let gv: number | undefined;
+        if (court.sets && court.sets.length > 0) {
+          gh = 0;
+          gv = 0;
+          for (const s of court.sets) {
+            gh += s.home;
+            gv += s.visitor;
+          }
+        }
         matches.set(key, {
           matchId: sc.matchId,
           date: datePlayed,
@@ -277,6 +296,8 @@ export async function loadCaptures(
           homeWon: court.homeWon,
           retired: court.retired,
           defaulted: court.defaulted,
+          gamesHome: gh,
+          gamesVisitor: gv,
         });
       }
     }

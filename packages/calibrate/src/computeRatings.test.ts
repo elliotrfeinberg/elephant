@@ -41,6 +41,8 @@ function mkMatch(
     homeWon,
     retired: undefined,
     defaulted: undefined,
+    gamesHome: undefined,
+    gamesVisitor: undefined,
   };
 }
 
@@ -87,6 +89,8 @@ describe("computeRatings", () => {
           homeWon: undefined,
           retired: undefined,
           defaulted: undefined,
+          gamesHome: undefined,
+          gamesVisitor: undefined,
         },
       ]
     );

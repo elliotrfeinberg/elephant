@@ -39,6 +39,7 @@ import {
   type UstaSession,
 } from "@tennis/scraper";
 import {
+  computePerfRatings,
   computeRatings,
   labeledRows,
   loadCaptures,
@@ -640,6 +641,104 @@ async function browserPostback(
   }
 }
 
+// USTA-style performance-rating model. Output is on the NTRP scale by
+// construction — no linear fit needed. We just report the per-band
+// mean/median of computed ratings as a sanity check (do labeled-3.0
+// players have computed ratings near 3.0?), and write the per-player
+// ratings file.
+async function ratingsFitPerf(
+  aggregatePaths: string[],
+  captures: import("@tennis/calibrate").CapturesData,
+  minMatches: number
+) {
+  console.error(
+    "Running chronological per-match performance-rating update " +
+      "(USTA-style; output on NTRP scale)..."
+  );
+  const result = computePerfRatings(captures);
+  console.error(
+    `  computed ${result.ratings.size} ratings; skipped ${result.skipped} matches (no winner)`
+  );
+  // Filter to labeled players with enough match history for the report.
+  const labeled: Array<{
+    key: string;
+    name: string;
+    ntrp: number;
+    matches: number;
+    perfRating: number;
+  }> = [];
+  for (const p of captures.players.values()) {
+    if (p.ntrp === undefined) continue;
+    const hist = result.history.get(p.key);
+    if (!hist || hist.length < minMatches) continue;
+    labeled.push({
+      key: p.key,
+      name: p.name,
+      ntrp: p.ntrp,
+      matches: hist.length,
+      perfRating: result.ratings.get(p.key)!,
+    });
+  }
+  console.error(
+    `  ${labeled.length} players with NTRP label and ≥${minMatches} matches`
+  );
+  if (labeled.length === 0) {
+    console.error("No labeled players to summarize. Aborting.");
+    process.exit(1);
+  }
+  // Per-band stats.
+  console.error("Predicted NTRP by labeled level (no fit step — output IS NTRP):");
+  const byLevel = new Map<number, number[]>();
+  for (const r of labeled) {
+    const arr = byLevel.get(r.ntrp) ?? [];
+    arr.push(r.perfRating);
+    byLevel.set(r.ntrp, arr);
+  }
+  // Overall RMSE: predicted vs label.
+  let sse = 0;
+  for (const r of labeled) sse += (r.perfRating - r.ntrp) ** 2;
+  const rmse = Math.sqrt(sse / labeled.length);
+  console.error(`  overall RMSE ${rmse.toFixed(4)} over ${labeled.length} players`);
+  for (const level of [...byLevel.keys()].sort()) {
+    const preds = byLevel.get(level)!;
+    const mean = preds.reduce((a, b) => a + b, 0) / preds.length;
+    const sorted = [...preds].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)]!;
+    const p10 = sorted[Math.floor(sorted.length * 0.1)]!;
+    const p90 = sorted[Math.floor(sorted.length * 0.9)]!;
+    console.error(
+      `  label ${level}: n=${preds.length} mean=${mean.toFixed(3)} ` +
+        `median=${median.toFixed(3)} p10=${p10.toFixed(3)} p90=${p90.toFixed(3)}`
+    );
+  }
+  // Write per-player ratings JSON alongside the first aggregate.
+  const primary = aggregatePaths[0]!;
+  const stem = primary.endsWith(".json") ? primary.slice(0, -5) : primary;
+  const ratingsPath = `${stem}.perf-ratings.json`;
+  const dump = [...result.ratings.entries()].map(([key, perf]) => {
+    const p = captures.players.get(key);
+    const hist = result.history.get(key) ?? [];
+    return {
+      key,
+      name: p?.name,
+      memberId: p?.memberId,
+      ntrpLabel: p?.ntrp,
+      teams: p?.teams ?? [],
+      perfRating: perf,
+      matches: hist.length,
+      // Recent 5 perf entries for spot-check.
+      recentMatches: hist.slice(-5).map((e) => ({
+        date: e.date.toISOString().slice(0, 10),
+        perf: e.perf,
+        opponent: e.opponentRating,
+        gamesDiff: e.gamesDiff,
+      })),
+    };
+  });
+  await writeFile(ratingsPath, JSON.stringify(dump, null, 2) + "\n", "utf8");
+  console.error(`Wrote ${ratingsPath}`);
+}
+
 // Run the full ratings pipeline against a parsed subflight aggregate:
 // load captures → chronological Glicko → fit Glicko→NTRP linear
 // regression against labeled rosters. Prints a summary table and a
@@ -647,7 +746,12 @@ async function browserPostback(
 // the input.
 async function ratingsFitCmd(
   aggregatePaths: string[],
-  opts: { minMatches: number; labelsPath?: string; priorFromNtrp: boolean }
+  opts: {
+    minMatches: number;
+    labelsPath?: string;
+    priorFromNtrp: boolean;
+    model: "glicko" | "perf";
+  }
 ) {
   if (aggregatePaths.length === 1) {
     console.error(`Loading captures from ${aggregatePaths[0]}`);
@@ -673,6 +777,10 @@ async function ratingsFitCmd(
     console.error(
       `  year-end labels: ${captures.yearEndLabelMatches} matched (${captures.yearEndLabelOverrides} differed from roster), ${captures.yearEndUnmatched} dump rows unmatched`
     );
+  }
+
+  if (opts.model === "perf") {
+    return ratingsFitPerf(aggregatePaths, captures, opts.minMatches);
   }
 
   console.error(
@@ -832,8 +940,9 @@ function usage(): never {
   tennis-scrape session check [probe-url]
   tennis-scrape crawl team <par1> <year> [--out <dir>]   (default --out: ./captures)
   tennis-scrape crawl subflight <par1> <year> [--out <dir>] [--include-players]
-  tennis-scrape ratings fit <subflight-aggregate.json> [<more-aggregates.json>...] [--min-matches N] [--labels <year-end.json>] [--prior-from-ntrp]
+  tennis-scrape ratings fit <subflight-aggregate.json> [<more-aggregates.json>...] [--min-matches N] [--labels <year-end.json>] [--prior-from-ntrp] [--model glicko|perf]
                        (--prior-from-ntrp seeds initial Glicko per player from their NTRP band — required for multi-band fits across disjoint subflights, otherwise the bands collapse to one prior)
+                       (--model perf uses USTA-style per-match performance ratings on the NTRP scale; score margin matters and the disjoint-cluster problem doesn't apply)
                        (multiple aggregates are unioned: e.g. 3.0 + 3.5 + 4.0 subflights → one fit)
 
 Env:
@@ -943,6 +1052,7 @@ async function main() {
         let minMatches = 3;
         let labelsPath: string | undefined;
         let priorFromNtrp = false;
+        let model: "glicko" | "perf" = "glicko";
         for (let i = 0; i < rest.length; i++) {
           const arg = rest[i]!;
           if (arg === "--min-matches") {
@@ -958,6 +1068,11 @@ async function main() {
             i += 1;
           } else if (arg === "--prior-from-ntrp") {
             priorFromNtrp = true;
+          } else if (arg === "--model") {
+            const next = rest[i + 1];
+            if (next !== "glicko" && next !== "perf") usage();
+            model = next;
+            i += 1;
           } else {
             positional.push(arg);
           }
@@ -967,6 +1082,7 @@ async function main() {
           minMatches,
           labelsPath,
           priorFromNtrp,
+          model,
         });
         break;
       }

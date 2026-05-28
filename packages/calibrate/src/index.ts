@@ -16,3 +16,10 @@ export {
   type ComputeRatingsResult,
   type LabeledRatingRow,
 } from "./computeRatings.js";
+
+export {
+  computePerfRatings,
+  type ComputePerfRatingsOptions,
+  type PerfRatingsResult,
+  type PerfMatchEntry,
+} from "./computePerfRatings.js";

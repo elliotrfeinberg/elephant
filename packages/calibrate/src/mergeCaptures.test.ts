@@ -43,6 +43,8 @@ function mkCourt(
     homeWon: true,
     retired: undefined,
     defaulted: undefined,
+    gamesHome: undefined,
+    gamesVisitor: undefined,
   };
 }
 

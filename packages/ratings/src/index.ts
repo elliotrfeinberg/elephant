@@ -24,3 +24,9 @@ export {
   type NtrpCalibration,
   type NtrpLabel,
 } from "./ntrp.js";
+
+export {
+  matchPerformance,
+  DEFAULT_MATCH_PERF_CONFIG,
+  type MatchPerfConfig,
+} from "./matchPerf.js";
