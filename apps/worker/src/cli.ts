@@ -43,6 +43,7 @@ import {
   labeledRows,
   loadCaptures,
   loadCapturesMulti,
+  DEFAULT_NTRP_TO_GLICKO_PRIOR,
 } from "@tennis/calibrate";
 import { fitCalibration, glickoToNtrp } from "@tennis/ratings";
 
@@ -646,7 +647,7 @@ async function browserPostback(
 // the input.
 async function ratingsFitCmd(
   aggregatePaths: string[],
-  opts: { minMatches: number; labelsPath?: string }
+  opts: { minMatches: number; labelsPath?: string; priorFromNtrp: boolean }
 ) {
   if (aggregatePaths.length === 1) {
     console.error(`Loading captures from ${aggregatePaths[0]}`);
@@ -674,8 +675,16 @@ async function ratingsFitCmd(
     );
   }
 
-  console.error("Running chronological Glicko-2 update...");
-  const result = computeRatings(captures);
+  console.error(
+    `Running chronological Glicko-2 update${
+      opts.priorFromNtrp ? " (priors seeded from NTRP labels)" : ""
+    }...`
+  );
+  const result = computeRatings(captures, {
+    ntrpToGlickoPrior: opts.priorFromNtrp
+      ? DEFAULT_NTRP_TO_GLICKO_PRIOR
+      : undefined,
+  });
   console.error(
     `  computed ${result.ratings.size} ratings; skipped ${result.skipped} matches (no winner)`
   );
@@ -823,7 +832,8 @@ function usage(): never {
   tennis-scrape session check [probe-url]
   tennis-scrape crawl team <par1> <year> [--out <dir>]   (default --out: ./captures)
   tennis-scrape crawl subflight <par1> <year> [--out <dir>] [--include-players]
-  tennis-scrape ratings fit <subflight-aggregate.json> [<more-aggregates.json>...] [--min-matches N] [--labels <year-end.json>]
+  tennis-scrape ratings fit <subflight-aggregate.json> [<more-aggregates.json>...] [--min-matches N] [--labels <year-end.json>] [--prior-from-ntrp]
+                       (--prior-from-ntrp seeds initial Glicko per player from their NTRP band — required for multi-band fits across disjoint subflights, otherwise the bands collapse to one prior)
                        (multiple aggregates are unioned: e.g. 3.0 + 3.5 + 4.0 subflights → one fit)
 
 Env:
@@ -932,6 +942,7 @@ async function main() {
         const positional: string[] = [];
         let minMatches = 3;
         let labelsPath: string | undefined;
+        let priorFromNtrp = false;
         for (let i = 0; i < rest.length; i++) {
           const arg = rest[i]!;
           if (arg === "--min-matches") {
@@ -945,12 +956,18 @@ async function main() {
             if (!next) usage();
             labelsPath = next;
             i += 1;
+          } else if (arg === "--prior-from-ntrp") {
+            priorFromNtrp = true;
           } else {
             positional.push(arg);
           }
         }
         if (positional.length < 1) usage();
-        await ratingsFitCmd(positional, { minMatches, labelsPath });
+        await ratingsFitCmd(positional, {
+          minMatches,
+          labelsPath,
+          priorFromNtrp,
+        });
         break;
       }
       case "crawl": {

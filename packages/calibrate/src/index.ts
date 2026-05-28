@@ -11,6 +11,8 @@ export {
 export {
   computeRatings,
   labeledRows,
+  DEFAULT_NTRP_TO_GLICKO_PRIOR,
+  type ComputeRatingsOptions,
   type ComputeRatingsResult,
   type LabeledRatingRow,
 } from "./computeRatings.js";
