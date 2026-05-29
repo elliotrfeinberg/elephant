@@ -7,7 +7,7 @@
 import Link from "next/link";
 import { listPlayers, ratingTypeLabel, type PlayerRow } from "@/lib/players";
 
-type SortKey = "name" | "band";
+type SortKey = "name" | "band" | "perf";
 
 function yearsIn(rows: PlayerRow[]): number[] {
   const ys = new Set<number>();
@@ -21,7 +21,8 @@ export default async function PlayersPage({
   searchParams: Promise<{ sort?: string; q?: string; band?: string }>;
 }) {
   const p = await searchParams;
-  const sort: SortKey = p.sort === "band" ? "band" : "name";
+  const sort: SortKey =
+    p.sort === "band" ? "band" : p.sort === "perf" ? "perf" : "name";
   const q = (p.q ?? "").trim();
   const band = p.band?.trim() ?? "";
 
@@ -90,6 +91,7 @@ export default async function PlayersPage({
           >
             <option value="name">Name (A → Z)</option>
             <option value="band">Roster band (high → low)</option>
+            <option value="perf">Perf rating (high → low)</option>
           </select>
         </label>
         {band && <input type="hidden" name="band" value={band} />}
@@ -128,6 +130,7 @@ export default async function PlayersPage({
                   {y} band
                 </th>
               ))}
+              <th className="px-3 py-2 text-right">Perf NTRP</th>
               <th className="px-3 py-2">Latest type</th>
             </tr>
           </thead>
@@ -161,6 +164,9 @@ export default async function PlayersPage({
                       </td>
                     );
                   })}
+                  <td className="px-3 py-2 text-right font-mono font-medium text-court-700">
+                    {pl.perf !== null ? pl.perf.toFixed(2) : "—"}
+                  </td>
                   <td className="px-3 py-2 text-xs text-stone-500">
                     {ratingTypeLabel(latestType)}
                   </td>
@@ -170,7 +176,7 @@ export default async function PlayersPage({
             {data.rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={3 + years.length}
+                  colSpan={4 + years.length}
                   className="px-3 py-8 text-center text-stone-400"
                 >
                   No players match the filters.

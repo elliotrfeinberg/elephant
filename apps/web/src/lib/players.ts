@@ -1,19 +1,26 @@
-// Server-side player data, backed by Postgres (replaces the perf-ratings
-// JSON loader). Phase-1 ingestion populates `players` + `player_year_ratings`
-// (published NTRP band + rating type + par1 per year). Computed perf ratings
-// and match history are NOT in the DB yet (phase-2 backfill + ratings
-// persistence), so those surfaces show a "pending" state for now.
+// Server-side player data, backed by Postgres.
+//
+// players + player_year_ratings give the published-NTRP bands per season;
+// player_perf_ratings + perf_match_results give the computed perf ratings and
+// per-court history (joined to court_matches/teams for opponents + scores).
 
 import "server-only";
-import { createClient, players, playerYearRatings } from "@tennis/db";
+import {
+  createClient,
+  players,
+  playerYearRatings,
+  playerPerfRatings,
+  perfMatchResults,
+  courtMatches,
+  teamMatches,
+  teams,
+} from "@tennis/db";
 import { and, asc, eq, ilike, inArray, sql } from "drizzle-orm";
 
 const SECTION = "USTA/NO. CALIFORNIA";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Singleton client — Next keeps modules warm across requests in a server
-// process, so we reuse one connection pool rather than opening per request.
 let _db: ReturnType<typeof createClient> | undefined;
 function db() {
   if (!_db) {
@@ -37,6 +44,7 @@ export interface PlayerRow {
   gender: string | null;
   memberId: string | null;
   latestNtrp: number | null;
+  perf: number | null; // computed display perf rating, null if unrated
   bands: PlayerYearBand[]; // ascending by year
 }
 
@@ -50,7 +58,7 @@ export interface PlayerListResult {
 export async function listPlayers(opts: {
   q?: string;
   band?: string;
-  sort?: "name" | "band";
+  sort?: "name" | "band" | "perf";
   limit?: number;
 }): Promise<PlayerListResult> {
   const d = db();
@@ -69,9 +77,11 @@ export async function listPlayers(opts: {
   const total = totalRes[0]?.total ?? 0;
 
   const order =
-    opts.sort === "band"
-      ? [sql`${players.publishedNtrp} desc nulls last`, asc(players.displayName)]
-      : [asc(players.displayName)];
+    opts.sort === "perf"
+      ? [sql`${playerPerfRatings.display} desc nulls last`, asc(players.displayName)]
+      : opts.sort === "band"
+        ? [sql`${players.publishedNtrp} desc nulls last`, asc(players.displayName)]
+        : [asc(players.displayName)];
   const ps = await d
     .select({
       id: players.id,
@@ -79,8 +89,10 @@ export async function listPlayers(opts: {
       gender: players.gender,
       memberId: players.ustaMemberId,
       latestNtrp: players.publishedNtrp,
+      perf: playerPerfRatings.display,
     })
     .from(players)
+    .leftJoin(playerPerfRatings, eq(playerPerfRatings.playerId, players.id))
     .where(where)
     .orderBy(...order)
     .limit(limit);
@@ -130,7 +142,36 @@ export async function listPlayers(opts: {
   return { rows, total, shown: rows.length, bandCounts };
 }
 
-export async function findPlayer(id: string): Promise<PlayerRow | null> {
+export interface PlayerPerf {
+  display: number | null;
+  adult: number | null;
+  mixed: number | null;
+  adultMatches: number;
+  mixedMatches: number;
+  otherMatches: number;
+}
+
+export interface MatchLogEntry {
+  playedOn: Date | null;
+  category: string;
+  kind: "S" | "D";
+  line: number;
+  perf: number;
+  postRating: number | null;
+  opponentRating: number | null;
+  won: boolean;
+  affectsRating: boolean;
+  sets: Array<{ player: number; opponent: number }>;
+  opponents: string[];
+  opponentTeam: string | null;
+}
+
+export interface PlayerDetail extends PlayerRow {
+  perfFull: PlayerPerf | null;
+  matchLog: MatchLogEntry[];
+}
+
+export async function findPlayer(id: string): Promise<PlayerDetail | null> {
   if (!UUID_RE.test(id)) return null;
   const d = db();
   const [p] = await d
@@ -145,6 +186,7 @@ export async function findPlayer(id: string): Promise<PlayerRow | null> {
     .where(eq(players.id, id))
     .limit(1);
   if (!p) return null;
+
   const yearRows = await d
     .select({
       year: playerYearRatings.year,
@@ -155,7 +197,110 @@ export async function findPlayer(id: string): Promise<PlayerRow | null> {
     .from(playerYearRatings)
     .where(eq(playerYearRatings.playerId, id))
     .orderBy(asc(playerYearRatings.year));
-  return { ...p, bands: yearRows };
+
+  const [pr] = await d
+    .select({
+      display: playerPerfRatings.display,
+      adult: playerPerfRatings.adult,
+      mixed: playerPerfRatings.mixed,
+      adultMatches: playerPerfRatings.adultMatches,
+      mixedMatches: playerPerfRatings.mixedMatches,
+      otherMatches: playerPerfRatings.otherMatches,
+    })
+    .from(playerPerfRatings)
+    .where(eq(playerPerfRatings.playerId, id))
+    .limit(1);
+
+  // Per-court history with opponents + score (resolve side from the court's
+  // player ids; orient sets to the player's perspective).
+  const mr = await d
+    .select({
+      playedOn: perfMatchResults.playedOn,
+      category: perfMatchResults.category,
+      perf: perfMatchResults.perf,
+      postRating: perfMatchResults.postRating,
+      opponentRating: perfMatchResults.opponentRating,
+      won: perfMatchResults.won,
+      affectsRating: perfMatchResults.affectsRating,
+      kind: courtMatches.courtKind,
+      line: courtMatches.line,
+      sets: courtMatches.sets,
+      h1: courtMatches.homePlayer1Id,
+      h2: courtMatches.homePlayer2Id,
+      v1: courtMatches.visitorPlayer1Id,
+      v2: courtMatches.visitorPlayer2Id,
+      homeTeamId: teamMatches.homeTeamId,
+      visitorTeamId: teamMatches.visitorTeamId,
+    })
+    .from(perfMatchResults)
+    .innerJoin(courtMatches, eq(perfMatchResults.courtMatchId, courtMatches.id))
+    .innerJoin(teamMatches, eq(courtMatches.teamMatchId, teamMatches.id))
+    .where(eq(perfMatchResults.playerId, id))
+    .orderBy(asc(perfMatchResults.playedOn));
+
+  const oppPlayerIds = new Set<string>();
+  const teamIds = new Set<string>();
+  for (const r of mr) {
+    const isHome = id === r.h1 || id === r.h2;
+    for (const o of isHome ? [r.v1, r.v2] : [r.h1, r.h2]) if (o) oppPlayerIds.add(o);
+    const ot = isHome ? r.visitorTeamId : r.homeTeamId;
+    if (ot) teamIds.add(ot);
+  }
+  const nameById = new Map<string, string>();
+  if (oppPlayerIds.size) {
+    for (const row of await d
+      .select({ id: players.id, name: players.displayName })
+      .from(players)
+      .where(inArray(players.id, [...oppPlayerIds]))) {
+      nameById.set(row.id, row.name);
+    }
+  }
+  const teamNameById = new Map<string, string>();
+  if (teamIds.size) {
+    for (const row of await d
+      .select({ id: teams.id, name: teams.name })
+      .from(teams)
+      .where(inArray(teams.id, [...teamIds]))) {
+      teamNameById.set(row.id, row.name);
+    }
+  }
+
+  const matchLog: MatchLogEntry[] = mr.map((r) => {
+    const isHome = id === r.h1 || id === r.h2;
+    const oppIds = (isHome ? [r.v1, r.v2] : [r.h1, r.h2]).filter(
+      (x): x is string => !!x
+    );
+    const oppTeamId = isHome ? r.visitorTeamId : r.homeTeamId;
+    const rawSets =
+      (r.sets as Array<{ home: number; visitor: number }> | null) ?? [];
+    const sets = rawSets.map((s) =>
+      isHome
+        ? { player: s.home, opponent: s.visitor }
+        : { player: s.visitor, opponent: s.home }
+    );
+    return {
+      playedOn: r.playedOn,
+      category: r.category,
+      kind: r.kind,
+      line: r.line,
+      perf: r.perf,
+      postRating: r.postRating,
+      opponentRating: r.opponentRating,
+      won: r.won,
+      affectsRating: r.affectsRating,
+      sets,
+      opponents: oppIds.map((o) => nameById.get(o) ?? "(unknown)"),
+      opponentTeam: oppTeamId ? teamNameById.get(oppTeamId) ?? null : null,
+    };
+  });
+
+  return {
+    ...p,
+    perf: pr?.display ?? null,
+    bands: yearRows,
+    perfFull: pr ?? null,
+    matchLog,
+  };
 }
 
 const RATING_TYPE_LABEL: Record<string, string> = {

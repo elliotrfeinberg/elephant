@@ -48,12 +48,18 @@ export default async function RatingsPage() {
       </div>
 
       <div className="rounded-lg border border-court-200 bg-court-50 p-4 text-sm text-court-900">
-        <p className="font-medium">Performance ratings are coming.</p>
+        <p className="font-medium">Performance ratings are live for ingested matches.</p>
         <p className="mt-1 text-court-800">
           USTA-style perf NTRP (score-aware, with year-over-year carry-over and
-          self-rate confidence weighting) is computed from match results. Match
-          ingestion is in progress — once it lands, per-player perf ratings and
-          trends appear here.
+          self-rate confidence weighting) is computed from crawled match
+          results.{" "}
+          <Link
+            href={{ pathname: "/players", query: { sort: "perf" } }}
+            className="font-medium text-court-700 underline hover:text-court-900"
+          >
+            Browse players by perf rating →
+          </Link>{" "}
+          Coverage grows as more flights are crawled.
         </p>
       </div>
 
