@@ -432,3 +432,33 @@ export const crawlState = pgTable(
   },
   (t) => [index("crawl_next_fetch_idx").on(t.nextFetchAfter)]
 );
+
+// Staging table for phase-2 match backfill. We fetch each scorecard (t=7,
+// by USTA match id) and store the PARSED result verbatim here, decoupling
+// the slow polite crawl from the relational normalization into
+// team_matches / court_matches (which can then be re-derived freely without
+// re-crawling). `parsed` is the ParsedScorecard from @tennis/scraper.
+export const rawScorecards = pgTable(
+  "raw_scorecards",
+  {
+    ustaMatchId: varchar("usta_match_id", { length: 32 }).primaryKey(),
+    year: integer("year").notNull(),
+    sourceUrl: text("source_url"),
+    // Scheduled/played date pulled up from the parse for cheap incremental
+    // filtering (the Match Summary date, or the scorecard's own date).
+    playedOn: timestamp("played_on", { withTimezone: true }),
+    // Raw scorecard HTML — the source of truth. We keep it so the parse can
+    // be re-derived without re-crawling (the parser is still being hardened
+    // against scorecard layout variants).
+    rawHtml: text("raw_html"),
+    parsed: jsonb("parsed").notNull(),
+    homeTeamName: text("home_team_name"),
+    visitorTeamName: text("visitor_team_name"),
+    league: text("league"),
+    courtCount: integer("court_count").notNull().default(0),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("raw_scorecards_year_idx").on(t.year)]
+);

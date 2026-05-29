@@ -1,0 +1,1 @@
+ALTER TABLE "raw_scorecards" ADD COLUMN "raw_html" text;

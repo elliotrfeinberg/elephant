@@ -15,6 +15,20 @@
       "when": 1780022528386,
       "tag": "0001_freezing_human_cannonball",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780027390915,
+      "tag": "0002_red_thena",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780027924494,
+      "tag": "0003_abnormal_sunfire",
+      "breakpoints": true
     }
   ]
 }

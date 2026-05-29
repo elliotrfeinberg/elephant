@@ -54,6 +54,7 @@ import {
 } from "@tennis/calibrate";
 import { fitCalibration, glickoToNtrp } from "@tennis/ratings";
 import { loadPlayers } from "./loadPlayers.js";
+import { backfillScorecards } from "./backfillScorecards.js";
 
 const ENV_CONTACT = process.env.TENNIS_CONTACT_EMAIL;
 const ENV_UA = process.env.TENNIS_USER_AGENT ?? "TennisPlatform/0.1";
@@ -1371,38 +1372,84 @@ async function main() {
         break;
       }
       case "db": {
-        if (sub !== "load-players") usage();
-        let ratingsDir = "captures/norcal/ratings";
-        let years = [2025, 2026];
-        let databaseUrl = process.env.DATABASE_URL;
-        for (let i = 0; i < rest.length; i++) {
-          const arg = rest[i]!;
-          const next = () => {
-            const n = rest[i + 1];
-            if (!n) usage();
-            i += 1;
-            return n!;
-          };
-          if (arg === "--ratings-dir") ratingsDir = next();
-          else if (arg === "--years") {
-            years = next()
-              .split(",")
-              .map((y) => Number(y.trim()))
-              .filter((y) => Number.isFinite(y));
-          } else if (arg === "--database-url") databaseUrl = next();
-          else usage();
-        }
-        if (!databaseUrl) {
+        if (sub === "load-players") {
+          let ratingsDir = "captures/norcal/ratings";
+          let years = [2025, 2026];
+          let databaseUrl = process.env.DATABASE_URL;
+          for (let i = 0; i < rest.length; i++) {
+            const arg = rest[i]!;
+            const next = () => {
+              const n = rest[i + 1];
+              if (!n) usage();
+              i += 1;
+              return n!;
+            };
+            if (arg === "--ratings-dir") ratingsDir = next();
+            else if (arg === "--years") {
+              years = next()
+                .split(",")
+                .map((y) => Number(y.trim()))
+                .filter((y) => Number.isFinite(y));
+            } else if (arg === "--database-url") databaseUrl = next();
+            else usage();
+          }
+          if (!databaseUrl) {
+            console.error(
+              "Missing DATABASE_URL (env or --database-url). e.g. postgres://tennis:tennis@localhost:5432/tennis"
+            );
+            process.exit(2);
+          }
+          if (years.length === 0) usage();
           console.error(
-            "Missing DATABASE_URL (env or --database-url). e.g. postgres://tennis:tennis@localhost:5432/tennis"
+            `Loading players from ${ratingsDir} for years ${years.join(", ")}`
           );
-          process.exit(2);
+          await loadPlayers({ databaseUrl, ratingsDir, years });
+          break;
         }
-        if (years.length === 0) usage();
-        console.error(
-          `Loading players from ${ratingsDir} for years ${years.join(", ")}`
-        );
-        await loadPlayers({ databaseUrl, ratingsDir, years });
+        if (sub === "backfill-scorecards") {
+          // <matches.json> --year N [--limit N] [--min-delay MS] [--max-delay MS]
+          const positional: string[] = [];
+          let year: number | undefined;
+          let limit = Number.POSITIVE_INFINITY;
+          let minDelayMs = 3000;
+          let maxDelayMs = 5000;
+          let databaseUrl = process.env.DATABASE_URL;
+          for (let i = 0; i < rest.length; i++) {
+            const arg = rest[i]!;
+            const next = () => {
+              const n = rest[i + 1];
+              if (!n) usage();
+              i += 1;
+              return n!;
+            };
+            if (arg === "--year") year = Number(next());
+            else if (arg === "--limit") limit = Number(next());
+            else if (arg === "--min-delay") minDelayMs = Number(next());
+            else if (arg === "--max-delay") maxDelayMs = Number(next());
+            else if (arg === "--database-url") databaseUrl = next();
+            else positional.push(arg);
+          }
+          if (positional.length !== 1 || !year || !Number.isFinite(limit)) {
+            usage();
+          }
+          if (!databaseUrl) {
+            console.error("Missing DATABASE_URL (env or --database-url).");
+            process.exit(2);
+          }
+          console.error(
+            `Backfilling scorecards from ${positional[0]} (year ${year}, limit ${limit})`
+          );
+          await backfillScorecards({
+            databaseUrl,
+            matchesPath: positional[0]!,
+            year: year!,
+            limit,
+            minDelayMs,
+            maxDelayMs,
+          });
+          break;
+        }
+        usage();
         break;
       }
       case "parse":

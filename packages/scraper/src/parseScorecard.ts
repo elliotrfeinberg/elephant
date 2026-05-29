@@ -169,15 +169,31 @@ function parseCourts($: CheerioAPI): ScorecardCourt[] {
     const $row = $a.closest("tr");
     if (!$row.length) return;
     const cells = $row.children("td").toArray();
-    if (cells.length < 7) return;
+    if (cells.length < 5) return;
 
+    // Column layout varies between scorecard variants — a 7-column form and
+    // a 9-column form that adds per-side set-win-count cells (which also
+    // shifts the visitor + scores columns). Locate cells by content/anchors
+    // instead of fixed indices:
+    //  - home/visitor player cells via the player-link anchors
+    //  - scores via the right-most cell carrying a "G-G" pattern
+    //  - the win mark (mark.gif) anywhere in the row
     const $courtLabelCell = $(cells[0]!);
-    const $homeCell = $(cells[1]!);
-    const $homeSpacer = $(cells[2]!);
-    // cells[3] is "Vs."
-    const $visitorCell = $(cells[4]!);
-    const $visitorSpacer = $(cells[5]!);
-    const $scoresCell = $(cells[6]!);
+    const $homeCell = $a.closest("td");
+    const $visitorCell = $row
+      .find(
+        `#ctl00_mainContent_rptScoreCard_ctl${ctlIndex}_lnkVisitorPlayer1`
+      )
+      .first()
+      .closest("td");
+    let scoresCellHtml = "";
+    for (let ci = cells.length - 1; ci >= 0; ci--) {
+      const $c = $(cells[ci]!);
+      if (/\d+\s*-\s*\d+/.test($c.text())) {
+        scoresCellHtml = $c.html() ?? "";
+        break;
+      }
+    }
 
     const labelText = $courtLabelCell.text().replace(/\s+/g, " ").trim();
     // "1# Doubles 6:30 PM" -> line=1, kind=D, time="6:30 PM"
@@ -192,7 +208,7 @@ function parseCourts($: CheerioAPI): ScorecardCourt[] {
     // parseSetScores returns each set as "match-winner-games" /
     // "match-loser-games" — the universal tennis-score notation. We
     // orient to {home, visitor} after we know homeWon from mark.gif.
-    const setsAsWinnerLoser = parseSetScores($scoresCell.html() ?? "");
+    const setsAsWinnerLoser = parseSetScores(scoresCellHtml);
     const completed = /\bCompleted\b/i.test($homeCell.text());
 
     // "Retired" / "Default" / "Defaulted" appear as bare text inside the
@@ -212,9 +228,9 @@ function parseCourts($: CheerioAPI): ScorecardCourt[] {
       ? "visitor"
       : undefined;
 
-    const homeHasMark = $homeSpacer.find("img[id$='_imgHomePlayer']").length > 0;
+    const homeHasMark = $row.find("img[id$='_imgHomePlayer']").length > 0;
     const visitorHasMark =
-      $visitorSpacer.find("img[id$='_imgVisitorPlayer']").length > 0;
+      $row.find("img[id$='_imgVisitorPlayer']").length > 0;
     let homeWon: boolean | undefined;
     if (homeHasMark && !visitorHasMark) homeWon = true;
     else if (visitorHasMark && !homeHasMark) homeWon = false;

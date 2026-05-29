@@ -1,0 +1,112 @@
+// Phase-2 match backfill (staging step). Reads a Match Summary export
+// (parseMatchSummary output: { rows: [{ matchId, date, ... }] }), fetches
+// each match's scorecard (t=7, by USTA match id) via the polite fetcher,
+// parses it, and upserts the parsed result into the raw_scorecards staging
+// table. Decoupled from relational normalization so the slow polite crawl
+// runs once and normalization can be re-derived freely.
+//
+// Resumable: match ids already present in raw_scorecards are skipped.
+
+import { readFile } from "node:fs/promises";
+import { createClient, rawScorecards } from "@tennis/db";
+import {
+  loadSession,
+  PoliteFetcher,
+  scorecardUrl,
+  parseScorecard,
+} from "@tennis/scraper";
+
+interface MatchRow {
+  matchId: string;
+  date?: string;
+  homeTeam?: string;
+  visitorTeam?: string;
+}
+
+function parseDate(s: string | undefined): Date | null {
+  if (!s) return null;
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  return new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
+}
+
+export async function backfillScorecards(opts: {
+  databaseUrl: string;
+  matchesPath: string;
+  year: number;
+  limit: number;
+  minDelayMs: number;
+  maxDelayMs: number;
+}): Promise<void> {
+  const db = createClient(opts.databaseUrl);
+  const parsed = JSON.parse(await readFile(opts.matchesPath, "utf8")) as {
+    rows: MatchRow[];
+  };
+  const rows = parsed.rows ?? [];
+  console.error(`  ${rows.length} matches in ${opts.matchesPath}`);
+
+  const existing = new Set(
+    (
+      await db.select({ id: rawScorecards.ustaMatchId }).from(rawScorecards)
+    ).map((r) => r.id)
+  );
+
+  const session = await loadSession();
+  const fetcher = new PoliteFetcher({
+    userAgent: session.userAgent,
+    contactEmail: session.contactEmail,
+    cookieHeader: session.cookieHeader,
+    minDelayMs: opts.minDelayMs,
+    maxDelayMs: opts.maxDelayMs,
+  });
+
+  let fetched = 0;
+  let skipped = 0;
+  let errors = 0;
+  for (const m of rows) {
+    if (fetched >= opts.limit) break;
+    if (existing.has(m.matchId)) {
+      skipped += 1;
+      continue;
+    }
+    const url = scorecardUrl({ matchId: m.matchId, year: opts.year });
+    try {
+      const res = await fetcher.fetch(url);
+      if (!res.body) {
+        errors += 1;
+        console.error(`  ${m.matchId}: empty body (status ${res.status})`);
+        continue;
+      }
+      const sc = parseScorecard(res.body);
+      await db
+        .insert(rawScorecards)
+        .values({
+          ustaMatchId: m.matchId,
+          year: opts.year,
+          sourceUrl: url,
+          playedOn: parseDate(sc.header.datePlayed) ?? parseDate(m.date),
+          rawHtml: res.body,
+          parsed: sc as unknown as Record<string, unknown>,
+          homeTeamName: sc.header.homeTeamName ?? m.homeTeam ?? null,
+          visitorTeamName: sc.header.visitorTeamName ?? m.visitorTeam ?? null,
+          league: sc.header.league ?? null,
+          courtCount: sc.courts.length,
+        })
+        .onConflictDoNothing();
+      fetched += 1;
+      if (fetched % 10 === 0) console.error(`  fetched ${fetched}…`);
+    } catch (err) {
+      errors += 1;
+      console.error(
+        `  ${m.matchId}: ERROR ${err instanceof Error ? err.message : err}`
+      );
+    }
+  }
+
+  console.error(
+    `Done. fetched ${fetched}, skipped ${skipped} (already stored), errors ${errors}.`
+  );
+  await (
+    db as unknown as { $client: { end: () => Promise<void> } }
+  ).$client.end();
+}
