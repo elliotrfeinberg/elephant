@@ -15,7 +15,7 @@ import {
   scorecardUrl,
   parseScorecard,
 } from "@tennis/scraper";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lte, sql } from "drizzle-orm";
 import { parseUsDate } from "./ingestUtils.js";
 import { accountReauth } from "./accountReauth.js";
 
@@ -122,12 +122,16 @@ export async function backfillScorecardsFromDb(opts: {
   // takes matches where hash(matchId) % total == index. Deterministic +
   // collision-free across shards, so N polite workers cut wall time by ~N.
   shard?: { index: number; total: number };
+  // Incremental mode: only matches whose scheduled date has passed
+  // (played_on <= now). Avoids fetching matches that haven't been played yet.
+  dueOnly?: boolean;
   minDelayMs: number;
   maxDelayMs: number;
 }): Promise<void> {
   const db = createClient(opts.databaseUrl);
   const conds = [eq(flightMatches.scorecardFetched, false)];
   if (opts.year) conds.push(eq(flightMatches.year, opts.year));
+  if (opts.dueOnly) conds.push(lte(flightMatches.playedOn, new Date()));
   if (opts.shard) {
     conds.push(
       sql`abs(hashtext(${flightMatches.ustaMatchId})) % ${opts.shard.total} = ${opts.shard.index}`
@@ -148,14 +152,20 @@ export async function backfillScorecardsFromDb(opts: {
   console.error(
     `${pending.length} unfetched flight_matches${
       opts.year ? ` (year ${opts.year})` : ""
-    }${opts.shard ? ` (shard ${opts.shard.index}/${opts.shard.total})` : ""}.`
+    }${opts.dueOnly ? " (due: played_on <= now)" : ""}${
+      opts.shard ? ` (shard ${opts.shard.index}/${opts.shard.total})` : ""
+    }.`
   );
 
-  // Match ids already present in raw_scorecards: skip the fetch but still mark
-  // them fetched in flight_matches (idempotent reconciliation).
-  const existing = new Set(
+  // Match ids already in raw_scorecards WITH results (courtCount > 0): skip the
+  // fetch and just mark them done. Rows with courtCount 0 (stored before the
+  // match was played) are intentionally NOT treated as done, so they re-fetch.
+  const existingWithResults = new Set(
     (
-      await db.select({ id: rawScorecards.ustaMatchId }).from(rawScorecards)
+      await db
+        .select({ id: rawScorecards.ustaMatchId })
+        .from(rawScorecards)
+        .where(sql`${rawScorecards.courtCount} > 0`)
     ).map((r) => r.id)
   );
 
@@ -171,9 +181,10 @@ export async function backfillScorecardsFromDb(opts: {
 
   let fetched = 0;
   let already = 0;
+  let notPlayed = 0;
   let errors = 0;
   for (const m of pending) {
-    if (existing.has(m.matchId)) {
+    if (existingWithResults.has(m.matchId)) {
       await db
         .update(flightMatches)
         .set({ scorecardFetched: true })
@@ -190,14 +201,19 @@ export async function backfillScorecardsFromDb(opts: {
         continue;
       }
       const sc = parseScorecard(res.body);
+      // No courts ⇒ scheduled but not yet played/entered. Don't store an empty
+      // shell and don't mark fetched — leave it for a later run to retry.
+      if (sc.courts.length === 0) {
+        notPlayed += 1;
+        continue;
+      }
       await db
         .insert(rawScorecards)
         .values({
           ustaMatchId: m.matchId,
           year: m.year,
           sourceUrl: url,
-          playedOn:
-            parseUsDate(sc.header.datePlayed) ?? m.playedOn ?? null,
+          playedOn: parseUsDate(sc.header.datePlayed) ?? m.playedOn ?? null,
           rawHtml: res.body,
           parsed: sc as unknown as Record<string, unknown>,
           homeTeamName: sc.header.homeTeamName ?? m.homeTeam ?? null,
@@ -220,7 +236,8 @@ export async function backfillScorecardsFromDb(opts: {
     }
   }
   console.error(
-    `Done. fetched ${fetched}, already-present ${already} (marked), errors ${errors}.`
+    `Done. fetched ${fetched}, already-present ${already} (marked), ` +
+      `not-yet-played ${notPlayed} (left to retry), errors ${errors}.`
   );
   await (
     db as unknown as { $client: { end: () => Promise<void> } }

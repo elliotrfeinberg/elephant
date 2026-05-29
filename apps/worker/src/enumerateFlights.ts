@@ -29,7 +29,7 @@ import {
   flightCodeFromTeamName,
   flightKeyOf,
 } from "@tennis/scraper";
-import { eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { parseUsDate } from "./ingestUtils.js";
 
 type Db = ReturnType<typeof createClient>;
@@ -252,11 +252,22 @@ export async function backfillFlightMatches(opts: {
   databaseUrl: string;
   limit: number;
   refresh: boolean;
+  years?: number[]; // restrict to these season years (e.g. active season)
   minDelayMs: number;
   maxDelayMs: number;
 }): Promise<void> {
   const db = createClient(opts.databaseUrl);
-  const base = db
+  const yearFilter =
+    opts.years && opts.years.length
+      ? inArray(flightCatalog.year, opts.years)
+      : undefined;
+  // refresh ⇒ all (optionally year-scoped); otherwise only flights never scraped.
+  const where = opts.refresh
+    ? yearFilter
+    : yearFilter
+      ? and(isNull(flightCatalog.matchSummaryAt), yearFilter)
+      : isNull(flightCatalog.matchSummaryAt);
+  const q = db
     .select({
       flightKey: flightCatalog.flightKey,
       year: flightCatalog.year,
@@ -264,9 +275,7 @@ export async function backfillFlightMatches(opts: {
       reachTeamAnchorId: flightCatalog.reachTeamAnchorId,
     })
     .from(flightCatalog);
-  const rows = opts.refresh
-    ? await base
-    : await base.where(isNull(flightCatalog.matchSummaryAt));
+  const rows = where ? await q.where(where) : await q;
   const targets = rows.slice(0, opts.limit);
   console.error(
     `${rows.length} flights need a Match Summary${

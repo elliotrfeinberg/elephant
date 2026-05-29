@@ -66,6 +66,7 @@ import {
   backfillScorecardsFromDb,
 } from "./backfillScorecards.js";
 import { enumerateFlights, backfillFlightMatches } from "./enumerateFlights.js";
+import { runIncremental } from "./incremental.js";
 import { normalizeMatches } from "./normalizeMatches.js";
 import { computeRatingsFromDb } from "./computeRatingsDb.js";
 import { accountReauth } from "./accountReauth.js";
@@ -1449,11 +1450,14 @@ function usage(): never {
                        (loads crawl-norcal rating dumps into Postgres: players + player_year_ratings. players permanent, years additive)
   tennis-scrape db enumerate-flights [--years 2025,2026] [--limit-players N] [--stop-after-barren N] [--min-delay MS] [--max-delay MS]
                        (walks players (rating-search par1 → t=T-0 record) to DISCOVER every flight, scraping each new flight's Match Summary into flight_catalog + flight_matches; resumable + self-terminating on saturation. --years restricts to those season years (a record page lists all years a member played). Defaults: 500 players, stop after 150 barren. Set TENNIS_ACCOUNT for auto-login.)
-  tennis-scrape db backfill-flight-matches [--limit N] [--refresh] [--min-delay MS] [--max-delay MS]
-                       (retry/refresh the Match Summary scrape for catalogued flights with no matches yet; --refresh re-scrapes all)
-  tennis-scrape db backfill-scorecards-db [--year N] [--shard i/N] [--limit N] [--min-delay MS] [--max-delay MS]
-                       (DB-driven: fetches t=7 scorecards for unfetched flight_matches → raw_scorecards, marking them done. The wide-crawl path.)
+  tennis-scrape db backfill-flight-matches [--years 2026] [--limit N] [--refresh] [--min-delay MS] [--max-delay MS]
+                       (retry/refresh the Match Summary scrape for catalogued flights with no matches yet; --refresh re-scrapes all; --years scopes to active seasons)
+  tennis-scrape db backfill-scorecards-db [--year N] [--due] [--shard i/N] [--limit N] [--min-delay MS] [--max-delay MS]
+                       (DB-driven: fetches t=7 scorecards for unfetched flight_matches → raw_scorecards. Only marks done when the match has results; not-yet-played matches are left to retry. The wide-crawl path.)
+                       (--due restricts to matches whose date has passed (played_on <= now) — for incremental runs.)
                        (--shard i/N takes a disjoint hash slice — run K workers with different accounts (TENNIS_ACCOUNT=acctK ... --shard 0/4, 1/4, …) to cut wall time ~K×. Collision-free across shards.)
+  tennis-scrape db incremental [--year 2026] [--refresh-flights] [--min-matches N] [--min-delay MS] [--max-delay MS]
+                       (DAILY delta crawl: (opt) re-scan active flights → fetch only DUE+unfetched scorecards → normalize → recompute ratings. Cheap (minutes) since match dates are already known. Run --refresh-flights on a slower (weekly) cadence to catch newly scheduled matches.)
   tennis-scrape db backfill-scorecards <matches.json> --year N [--limit N] [--min-delay MS] [--max-delay MS]
                        (one-flight variant: fetches each match's scorecard (t=7), parses, upserts into raw_scorecards staging — resumable, polite)
   tennis-scrape db normalize-matches [--limit N]
@@ -1627,6 +1631,7 @@ async function main() {
           // Retry/refresh Match Summary scrape for catalogued flights.
           let limit = Number.POSITIVE_INFINITY;
           let refresh = false;
+          let years: number[] = [];
           let minDelayMs = 3000;
           let maxDelayMs = 5000;
           let databaseUrl = process.env.DATABASE_URL;
@@ -1640,7 +1645,12 @@ async function main() {
             };
             if (arg === "--limit") limit = Number(next());
             else if (arg === "--refresh") refresh = true;
-            else if (arg === "--min-delay") minDelayMs = Number(next());
+            else if (arg === "--years") {
+              years = next()
+                .split(",")
+                .map((y) => Number(y.trim()))
+                .filter((y) => Number.isFinite(y));
+            } else if (arg === "--min-delay") minDelayMs = Number(next());
             else if (arg === "--max-delay") maxDelayMs = Number(next());
             else if (arg === "--database-url") databaseUrl = next();
             else usage();
@@ -1655,6 +1665,7 @@ async function main() {
             databaseUrl,
             limit,
             refresh,
+            years,
             minDelayMs,
             maxDelayMs,
           });
@@ -1665,6 +1676,7 @@ async function main() {
           let limit = Number.POSITIVE_INFINITY;
           let year: number | undefined;
           let shard: { index: number; total: number } | undefined;
+          let dueOnly = false;
           let minDelayMs = 3000;
           let maxDelayMs = 5000;
           let databaseUrl = process.env.DATABASE_URL;
@@ -1678,6 +1690,7 @@ async function main() {
             };
             if (arg === "--limit") limit = Number(next());
             else if (arg === "--year") year = Number(next());
+            else if (arg === "--due") dueOnly = true;
             else if (arg === "--shard") {
               // "i/N": this worker handles matches where hash % N == i.
               const [iStr, nStr] = next().split("/");
@@ -1710,6 +1723,47 @@ async function main() {
             limit,
             year,
             shard,
+            dueOnly,
+            minDelayMs,
+            maxDelayMs,
+          });
+          break;
+        }
+        if (sub === "incremental") {
+          // Daily delta crawl: (opt) refresh active flights → fetch due
+          // scorecards → normalize → recompute ratings.
+          let year: number | undefined;
+          let refreshFlights = false;
+          let minMatches = 3;
+          let minDelayMs = 3000;
+          let maxDelayMs = 5000;
+          let databaseUrl = process.env.DATABASE_URL;
+          for (let i = 0; i < rest.length; i++) {
+            const arg = rest[i]!;
+            const next = () => {
+              const n = rest[i + 1];
+              if (!n) usage();
+              i += 1;
+              return n!;
+            };
+            if (arg === "--year") year = Number(next());
+            else if (arg === "--refresh-flights") refreshFlights = true;
+            else if (arg === "--min-matches") minMatches = Number(next());
+            else if (arg === "--min-delay") minDelayMs = Number(next());
+            else if (arg === "--max-delay") maxDelayMs = Number(next());
+            else if (arg === "--database-url") databaseUrl = next();
+            else usage();
+          }
+          if (!databaseUrl) {
+            console.error("Missing DATABASE_URL (env or --database-url).");
+            process.exit(2);
+          }
+          await ensureAccountSession();
+          await runIncremental({
+            databaseUrl,
+            year,
+            refreshFlights,
+            minMatches,
             minDelayMs,
             maxDelayMs,
           });
