@@ -64,6 +64,7 @@ import { loadPlayers } from "./loadPlayers.js";
 import { backfillScorecards } from "./backfillScorecards.js";
 import { normalizeMatches } from "./normalizeMatches.js";
 import { computeRatingsFromDb } from "./computeRatingsDb.js";
+import { accountReauth } from "./accountReauth.js";
 
 const ENV_CONTACT = process.env.TENNIS_CONTACT_EMAIL;
 const ENV_UA = process.env.TENNIS_USER_AGENT ?? "TennisPlatform/0.1";
@@ -90,14 +91,21 @@ function anonFetcher(): PoliteFetcher {
 // Authenticated fetcher. Loads ~/.tennis-platform/usta-session.json and sends
 // the Cookie + UA verbatim with every request.
 async function authFetcher(
-  overrides: { minDelayMs?: number; maxDelayMs?: number } = {}
+  overrides: {
+    minDelayMs?: number;
+    maxDelayMs?: number;
+    // session check passes this so it REPORTS expiry instead of healing it.
+    noReauth?: boolean;
+  } = {}
 ): Promise<{ fetcher: PoliteFetcher; session: UstaSession }> {
   const session = await loadSession();
+  const { noReauth, ...fetchOpts } = overrides;
   const fetcher = new PoliteFetcher({
     userAgent: session.userAgent,
     contactEmail: session.contactEmail,
     cookieHeader: session.cookieHeader,
-    ...overrides,
+    reauth: noReauth ? undefined : accountReauth(),
+    ...fetchOpts,
   });
   return { fetcher, session };
 }
@@ -302,7 +310,8 @@ async function sessionInit() {
 }
 
 async function sessionCheck(probeUrl?: string) {
-  const { fetcher, session } = await authFetcher();
+  // noReauth: report expiry rather than silently re-logging in.
+  const { fetcher, session } = await authFetcher({ noReauth: true });
   // Default probe: a known auth-walled URL. The user can override by passing
   // their own team URL — useful right after pasting cookies to confirm the
   // session works against their specific team.
@@ -461,6 +470,7 @@ async function crawlSubflightCmd(
     cookieHeader: session.cookieHeader,
     minDelayMs: 3000,
     maxDelayMs: 5000,
+    reauth: accountReauth(),
   });
   try {
     return await runSubflightCrawl(browser, fetcher, par1, year, opts);
@@ -790,6 +800,7 @@ async function ratingsCrawlCmd(opts: {
     cookieHeader: session.cookieHeader,
     minDelayMs: 3000,
     maxDelayMs: 5000,
+    reauth: accountReauth(),
   });
   try {
     for (const year of opts.years) {
