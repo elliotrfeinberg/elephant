@@ -1,11 +1,19 @@
 "use client";
-// Home / landing — Center Court.
+// Home / landing — Center Court. Headline stats, distribution, and the
+// featured rating card are wired to real section data via props.
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Chip } from "@/components/mm/ui";
-import * as MM from "@/lib/demo";
 
-function Hero() {
+export interface HomeView {
+  total: number;
+  rated: number;
+  dist: { band: number; count: number }[];
+  top: { id: string; name: string; perf: number | null; band: number | null } | null;
+}
+
+function Hero({ v }: { v: HomeView }) {
+  const t = v.top;
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 36, alignItems: "stretch" }}>
       <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", padding: "8px 0" }}>
@@ -24,7 +32,11 @@ function Hero() {
           <Link href="/captain" style={{ padding: "14px 22px", borderRadius: 11, background: "transparent", border: "1.5px solid var(--hair)", color: "var(--ink)", fontSize: 15, fontWeight: 700, textDecoration: "none" }}>Captain tools →</Link>
         </div>
         <div style={{ display: "flex", gap: 28, marginTop: 34 }}>
-          {[["20,180", "NorCal players"], ["1.4M", "sets scored"], ["~85%", "agree w/ USTA year-end"]].map((s, i) => (
+          {[
+            [v.total.toLocaleString(), "NorCal players"],
+            [v.rated.toLocaleString(), "players rated"],
+            ["Nightly", "rating refresh"],
+          ].map((s, i) => (
             <div key={i}>
               <div className="mm-num" style={{ fontSize: 30, color: "var(--ink)" }}>{s[0]}</div>
               <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{s[1]}</div>
@@ -44,19 +56,18 @@ function Hero() {
         <div style={{ position: "relative", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <span style={{ width: 9, height: 9, borderRadius: 9, background: "var(--ball)", boxShadow: "0 0 0 4px rgba(215,232,77,.25)" }} />
-            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase", color: "rgba(255,255,255,.85)" }}>Live perf rating</span>
+            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase", color: "rgba(255,255,255,.85)" }}>Top perf rating</span>
           </div>
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--ball-ink)", background: "var(--ball)", padding: "3px 9px", borderRadius: 100 }}>4.0 BAND</span>
+          {t?.band != null && <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--ball-ink)", background: "var(--ball)", padding: "3px 9px", borderRadius: 100 }}>{t.band.toFixed(1)} BAND</span>}
         </div>
         <div style={{ position: "relative" }}>
-          <div style={{ fontSize: 13, color: "rgba(255,255,255,.8)", fontWeight: 600 }}>Marcus Holloway · Cedar Park</div>
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,.8)", fontWeight: 600 }}>{t ? t.name : "—"} · USTA NorCal</div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
-            <div className="mm-num" style={{ fontSize: 132, lineHeight: 0.82, color: "#fff" }}>3.94</div>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "var(--ball)", fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 15 }}>
-              <svg width={12} height={12} viewBox="0 0 12 12"><path d="M6 1l5 7H1z" fill="currentColor" /></svg>+0.06
-            </span>
+            <div className="mm-num" style={{ fontSize: 132, lineHeight: 0.82, color: "#fff" }}>{t?.perf != null ? t.perf.toFixed(2) : "—"}</div>
           </div>
-          <div style={{ fontSize: 13, color: "rgba(255,255,255,.75)", marginTop: 8 }}>9–4 this season · High confidence · approaching 4.0</div>
+          {t && (
+            <Link href={`/players/${t.id}` as never} style={{ fontSize: 13, color: "var(--ball)", fontWeight: 700, textDecoration: "none" }}>View profile →</Link>
+          )}
         </div>
       </div>
     </div>
@@ -73,22 +84,22 @@ function Feature({ title, body, icon }: { title: string; body: string; icon: Rea
   );
 }
 
-function DistViz() {
-  const max = Math.max(...MM.dist.map((d) => d.n));
+function DistViz({ v }: { v: HomeView }) {
+  const max = Math.max(1, ...v.dist.map((d) => d.count));
   return (
     <div className="mm-card" style={{ padding: "24px 28px", display: "grid", gridTemplateColumns: "1fr 1.3fr", gap: 36, alignItems: "center" }}>
       <div>
         <div className="mm-kicker">Section snapshot</div>
         <h3 style={{ fontSize: 26, fontWeight: 700, margin: "8px 0 10px", color: "var(--ink)" }}>Where NorCal sits</h3>
-        <p style={{ fontSize: 14, lineHeight: 1.55, color: "var(--ink-2)", margin: 0 }}>Published NTRP across the section — the bell sits squarely at 3.5–4.0, where league play is thickest.</p>
-        <div style={{ marginTop: 16 }}><Chip tone="court">20,180 players rated</Chip></div>
+        <p style={{ fontSize: 14, lineHeight: 1.55, color: "var(--ink-2)", margin: 0 }}>Published NTRP across the section — league play is thickest in the middle of the curve.</p>
+        <div style={{ marginTop: 16 }}><Chip tone="court">{v.total.toLocaleString()} players rated</Chip></div>
       </div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 14, height: 180 }}>
-        {MM.dist.map((d) => (
+        {v.dist.map((d) => (
           <div key={d.band} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8, height: "100%", justifyContent: "flex-end" }}>
-            <div className="mm-mono" style={{ fontSize: 12, color: "var(--muted)" }}>{d.n.toLocaleString()}</div>
-            <div style={{ width: "100%", height: (d.n / max) * 130, borderRadius: "6px 6px 0 0", background: d.band === 4.0 ? "var(--court)" : "var(--court-tint-2)" }} />
-            <div className="mm-num" style={{ fontSize: 18, color: d.band === 4.0 ? "var(--court)" : "var(--ink-2)" }}>{d.band.toFixed(1)}</div>
+            <div className="mm-mono" style={{ fontSize: 12, color: "var(--muted)" }}>{d.count.toLocaleString()}</div>
+            <div style={{ width: "100%", height: (d.count / max) * 130, borderRadius: "6px 6px 0 0", background: "var(--court-tint-2)" }} />
+            <div className="mm-num" style={{ fontSize: 18, color: "var(--ink-2)" }}>{d.band.toFixed(1)}</div>
           </div>
         ))}
       </div>
@@ -100,16 +111,16 @@ const ic = (d: ReactNode) => (
   <svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 );
 
-export function Home() {
+export function Home({ view }: { view: HomeView }) {
   return (
     <div style={{ maxWidth: 1320, margin: "0 auto", padding: "44px 44px 52px", display: "flex", flexDirection: "column", gap: 40 }}>
-      <Hero />
+      <Hero v={view} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18 }}>
         <Feature title="Daily updates" body="Scores hit TennisLink within hours; ratings recompute every night — not once a month. See exactly how today's match moved your number." icon={ic(<path d="M10 5v5l3 2M10 2a8 8 0 100 16 8 8 0 000-16z" />)} />
         <Feature title="Score-aware model" body="A symmetric perf model reads the scoreline, not just the W. Per-court doubles attribution preserves partner spread across the lineup." icon={ic(<path d="M3 14l4-5 3 3 5-7M3 17h14" />)} />
-        <Feature title="Confidence intervals" body="Rating deviation flags new and inactive players as low-confidence. No more single-number lies about who's really a sandbagger." icon={ic(<path d="M10 2l7 4v5c0 4-3 6-7 7-4-1-7-3-7-7V6z" />)} />
+        <Feature title="Confidence intervals" body="Match-count confidence flags new and inactive players as low-confidence. No more single-number lies about who's really a sandbagger." icon={ic(<path d="M10 2l7 4v5c0 4-3 6-7 7-4-1-7-3-7-7V6z" />)} />
       </div>
-      <DistViz />
+      <DistViz v={view} />
     </div>
   );
 }
