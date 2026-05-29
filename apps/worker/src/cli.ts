@@ -1334,6 +1334,17 @@ function usage(): never {
                        (--prior-from-ntrp seeds initial Glicko per player from their NTRP band — required for multi-band fits across disjoint subflights, otherwise the bands collapse to one prior)
                        (--model perf uses USTA-style per-match performance ratings on the NTRP scale; score margin matters and the disjoint-cluster problem doesn't apply)
                        (multiple aggregates are unioned: e.g. 3.0 + 3.5 + 4.0 subflights → one fit)
+  tennis-scrape flight-matches <par1> <sToken> <out-html>
+                       (renders a flight's Match Summary (t=T-0 SPA) and writes {out}.matches.json: matchId + date + teams)
+  tennis-scrape db load-players [--ratings-dir <dir>] [--years 2025,2026]
+                       (loads crawl-norcal rating dumps into Postgres: players + player_year_ratings. players permanent, years additive)
+  tennis-scrape db backfill-scorecards <matches.json> --year N [--limit N] [--min-delay MS] [--max-delay MS]
+                       (fetches each match's scorecard (t=7), parses, upserts into raw_scorecards staging — resumable, polite)
+  tennis-scrape db normalize-matches [--limit N]
+                       (DB→DB: raw_scorecards → leagues/flights/subflights/teams/team_matches/court_matches with player resolution)
+  tennis-scrape db compute-ratings [--min-matches N]
+                       (computes per-category perf ratings over DB matches; prints a per-band summary. preview only — not persisted)
+                       (db commands need DATABASE_URL, e.g. postgres://tennis:tennis@localhost:5432/tennis)
 
 Env:
   TENNIS_CONTACT_EMAIL  email site admins can use to reach you

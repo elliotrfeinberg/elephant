@@ -25,10 +25,13 @@ import {
   rawScorecards,
 } from "@tennis/db";
 import { and, eq } from "drizzle-orm";
+import {
+  genderWord,
+  parseTeamCode,
+  type Gender,
+} from "./ingestUtils.js";
 
 const SECTION = "USTA/NO. CALIFORNIA";
-
-type Gender = "M" | "F" | "X";
 
 interface ParsedCourt {
   kind: "S" | "D";
@@ -54,23 +57,6 @@ interface RawRow {
   homeTeamName: string | null;
   visitorTeamName: string | null;
   league: string | null;
-}
-
-function genderWord(g: Gender): string {
-  return g === "F" ? "Women's" : g === "M" ? "Men's" : "Mixed";
-}
-
-// "MORAGA CC 40AW3.5A" -> { division:40, gender:F, ntrp:3.5 }
-function parseTeamCode(
-  name: string
-): { division: number; gender: Gender; ntrp: number } | null {
-  const m = name.match(/(\d{2})([AX])([WMX])(\d\.\d)[A-Z]?\s*$/i);
-  if (!m) return null;
-  const cat = m[2]!.toUpperCase();
-  const gCode = m[3]!.toUpperCase();
-  let gender: Gender = gCode === "W" ? "F" : gCode === "M" ? "M" : "X";
-  if (cat === "X") gender = "X";
-  return { division: Number(m[1]), gender, ntrp: Number(m[4]) };
 }
 
 export async function normalizeMatches(opts: {

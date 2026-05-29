@@ -23,6 +23,12 @@ import {
   playerYearRatings,
 } from "@tennis/db";
 import { eq } from "drizzle-orm";
+import {
+  firstLast,
+  mapGender,
+  parseUsDate,
+  type Gender,
+} from "./ingestUtils.js";
 
 const SECTION_CODE = "USTA/NO. CALIFORNIA";
 const DISTRICT_NAME = "NO. CALIFORNIA";
@@ -38,23 +44,6 @@ interface RatingRow {
   playerPar1?: string;
 }
 
-type Gender = "M" | "F" | "X";
-
-// "Last, First" -> "First Last". Leaves comma-less names as-is.
-function firstLast(name: string): string {
-  const m = name.match(/^([^,]+),\s*(.+)$/);
-  if (!m) return name.replace(/\s+/g, " ").trim();
-  return `${m[2]!.trim()} ${m[1]!.trim()}`.replace(/\s+/g, " ").trim();
-}
-function mapGender(g?: string): Gender {
-  return g === "M" ? "M" : g === "F" ? "F" : "X";
-}
-function parseDate(s?: string): Date | null {
-  if (!s) return null;
-  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (!m) return null;
-  return new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
-}
 function ntrpOf(r: RatingRow): number | null {
   return r.ntrpLevel && r.ntrpLevel > 0 ? r.ntrpLevel : null;
 }
@@ -183,7 +172,7 @@ export async function loadPlayers(opts: {
         year: y,
         ntrp: ntrpOf(r),
         ratingType: r.ratingType ? r.ratingType.slice(0, 8) : null,
-        ratingDate: parseDate(r.ratingDate),
+        ratingDate: parseUsDate(r.ratingDate),
         tennislinkPar1: r.playerPar1 ?? null,
         gender: mapGender(r.gender),
         city: r.city ?? null,

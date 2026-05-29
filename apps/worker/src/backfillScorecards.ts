@@ -15,19 +15,13 @@ import {
   scorecardUrl,
   parseScorecard,
 } from "@tennis/scraper";
+import { parseUsDate } from "./ingestUtils.js";
 
 interface MatchRow {
   matchId: string;
   date?: string;
   homeTeam?: string;
   visitorTeam?: string;
-}
-
-function parseDate(s: string | undefined): Date | null {
-  if (!s) return null;
-  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (!m) return null;
-  return new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
 }
 
 export async function backfillScorecards(opts: {
@@ -84,7 +78,7 @@ export async function backfillScorecards(opts: {
           ustaMatchId: m.matchId,
           year: opts.year,
           sourceUrl: url,
-          playedOn: parseDate(sc.header.datePlayed) ?? parseDate(m.date),
+          playedOn: parseUsDate(sc.header.datePlayed) ?? parseUsDate(m.date),
           rawHtml: res.body,
           parsed: sc as unknown as Record<string, unknown>,
           homeTeamName: sc.header.homeTeamName ?? m.homeTeam ?? null,
