@@ -14,6 +14,7 @@ import {
   PoliteFetcher,
   scorecardUrl,
   parseScorecard,
+  ensureSession,
 } from "@tennis/scraper";
 import { parseUsDate } from "./ingestUtils.js";
 
@@ -46,12 +47,30 @@ export async function backfillScorecards(opts: {
   );
 
   const session = await loadSession();
+  // When running under an account, re-login in-flight if a scorecard fetch
+  // bounces to the login page (long crawls can outlive a cookie).
+  const account = process.env.TENNIS_ACCOUNT;
   const fetcher = new PoliteFetcher({
     userAgent: session.userAgent,
     contactEmail: session.contactEmail,
     cookieHeader: session.cookieHeader,
     minDelayMs: opts.minDelayMs,
     maxDelayMs: opts.maxDelayMs,
+    reauth: account
+      ? async () => {
+          console.error(
+            `  (session expired mid-crawl — re-logging in "${account}"…)`
+          );
+          const { session: fresh } = await ensureSession({
+            account,
+            forceRefresh: true,
+          });
+          return {
+            cookieHeader: fresh.cookieHeader,
+            userAgent: fresh.userAgent,
+          };
+        }
+      : undefined,
   });
 
   let fetched = 0;

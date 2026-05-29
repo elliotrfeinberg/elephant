@@ -31,6 +31,11 @@ export interface PoliteFetchOptions {
   minDelayMs?: number;
   maxDelayMs?: number;
   maxRetries?: number;
+  // Optional re-authentication hook. When a request bounces to the login
+  // page mid-crawl, the fetcher calls this once to obtain fresh credentials
+  // (e.g. via an account re-login), swaps them in, and retries the request.
+  // Without it, a login redirect throws LoginRequiredError as before.
+  reauth?: () => Promise<{ cookieHeader: string; userAgent: string }>;
 }
 
 export interface CachedFetchResult {
@@ -53,8 +58,13 @@ interface Queue {
 }
 
 export class PoliteFetcher {
-  private readonly userAgent: string;
-  private readonly cookieHeader: string | undefined;
+  // Mutable: a re-auth hook may swap these in mid-crawl on a login bounce.
+  private userAgent: string;
+  private cookieHeader: string | undefined;
+  private readonly reauth?: () => Promise<{
+    cookieHeader: string;
+    userAgent: string;
+  }>;
   private readonly minDelayMs: number;
   private readonly maxDelayMs: number;
   private readonly maxRetries: number;
@@ -72,6 +82,7 @@ export class PoliteFetcher {
       ? opts.userAgent
       : `${opts.userAgent} (+contact: ${opts.contactEmail})`;
     this.cookieHeader = opts.cookieHeader;
+    this.reauth = opts.reauth;
     this.minDelayMs = opts.minDelayMs ?? 2000;
     this.maxDelayMs = opts.maxDelayMs ?? 5000;
     this.maxRetries = opts.maxRetries ?? 4;
@@ -116,6 +127,16 @@ export class PoliteFetcher {
     });
   }
 
+  // Swap in fresh credentials via the reauth hook. Returns false when no
+  // hook is configured (caller then surfaces LoginRequiredError as before).
+  private async tryReauth(): Promise<boolean> {
+    if (!this.reauth) return false;
+    const fresh = await this.reauth();
+    this.cookieHeader = fresh.cookieHeader;
+    this.userAgent = fresh.userAgent;
+    return true;
+  }
+
   private async runOnHost<T>(host: string, work: () => Promise<T>): Promise<T> {
     const prev = this.hostQueues.get(host);
     const ready = prev?.promise ?? Promise.resolve();
@@ -143,6 +164,7 @@ export class PoliteFetcher {
     cond: ConditionalHeaders
   ): Promise<CachedFetchResult> {
     let attempt = 0;
+    let reauthed = false;
     let lastErr: unknown;
     while (attempt <= this.maxRetries) {
       try {
@@ -179,6 +201,11 @@ export class PoliteFetcher {
         if (res.statusCode === 301 || res.statusCode === 302) {
           const location = headerOf(res.headers, "location");
           if (isLoginRedirect(res.statusCode, location)) {
+            // Session expired mid-crawl: re-auth once and retry, else bubble.
+            if (!reauthed && (await this.tryReauth())) {
+              reauthed = true;
+              continue;
+            }
             throw new LoginRequiredError(url);
           }
           // Other redirects (e.g. to the page itself with a normalized URL):
@@ -228,6 +255,7 @@ export class PoliteFetcher {
     body: string
   ): Promise<CachedFetchResult> {
     let attempt = 0;
+    let reauthed = false;
     let lastErr: unknown;
     while (attempt <= this.maxRetries) {
       try {
@@ -249,6 +277,10 @@ export class PoliteFetcher {
         if (res.statusCode === 301 || res.statusCode === 302) {
           const location = headerOf(res.headers, "location");
           if (isLoginRedirect(res.statusCode, location)) {
+            if (!reauthed && (await this.tryReauth())) {
+              reauthed = true;
+              continue;
+            }
             throw new LoginRequiredError(url);
           }
           if (location) {
