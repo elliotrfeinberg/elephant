@@ -56,6 +56,7 @@ import { fitCalibration, glickoToNtrp } from "@tennis/ratings";
 import { loadPlayers } from "./loadPlayers.js";
 import { backfillScorecards } from "./backfillScorecards.js";
 import { normalizeMatches } from "./normalizeMatches.js";
+import { computeRatingsFromDb } from "./computeRatingsDb.js";
 
 const ENV_CONTACT = process.env.TENNIS_CONTACT_EMAIL;
 const ENV_UA = process.env.TENNIS_USER_AGENT ?? "TennisPlatform/0.1";
@@ -1430,7 +1431,7 @@ async function main() {
             else if (arg === "--database-url") databaseUrl = next();
             else positional.push(arg);
           }
-          if (positional.length !== 1 || !year || !Number.isFinite(limit)) {
+          if (positional.length !== 1 || !year || Number.isNaN(limit)) {
             usage();
           }
           if (!databaseUrl) {
@@ -1471,6 +1472,28 @@ async function main() {
           }
           console.error("Normalizing staged scorecards → relational schema");
           await normalizeMatches({ databaseUrl, limit });
+          break;
+        }
+        if (sub === "compute-ratings") {
+          let minMatches = 3;
+          let databaseUrl = process.env.DATABASE_URL;
+          for (let i = 0; i < rest.length; i++) {
+            const arg = rest[i]!;
+            const next = () => {
+              const n = rest[i + 1];
+              if (!n) usage();
+              i += 1;
+              return n!;
+            };
+            if (arg === "--min-matches") minMatches = Number(next());
+            else if (arg === "--database-url") databaseUrl = next();
+            else usage();
+          }
+          if (!databaseUrl) {
+            console.error("Missing DATABASE_URL (env or --database-url).");
+            process.exit(2);
+          }
+          await computeRatingsFromDb({ databaseUrl, minMatches });
           break;
         }
         usage();
