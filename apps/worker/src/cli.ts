@@ -55,6 +55,7 @@ import {
 import { fitCalibration, glickoToNtrp } from "@tennis/ratings";
 import { loadPlayers } from "./loadPlayers.js";
 import { backfillScorecards } from "./backfillScorecards.js";
+import { normalizeMatches } from "./normalizeMatches.js";
 
 const ENV_CONTACT = process.env.TENNIS_CONTACT_EMAIL;
 const ENV_UA = process.env.TENNIS_USER_AGENT ?? "TennisPlatform/0.1";
@@ -1447,6 +1448,29 @@ async function main() {
             minDelayMs,
             maxDelayMs,
           });
+          break;
+        }
+        if (sub === "normalize-matches") {
+          let limit = Number.POSITIVE_INFINITY;
+          let databaseUrl = process.env.DATABASE_URL;
+          for (let i = 0; i < rest.length; i++) {
+            const arg = rest[i]!;
+            const next = () => {
+              const n = rest[i + 1];
+              if (!n) usage();
+              i += 1;
+              return n!;
+            };
+            if (arg === "--limit") limit = Number(next());
+            else if (arg === "--database-url") databaseUrl = next();
+            else usage();
+          }
+          if (!databaseUrl) {
+            console.error("Missing DATABASE_URL (env or --database-url).");
+            process.exit(2);
+          }
+          console.error("Normalizing staged scorecards → relational schema");
+          await normalizeMatches({ databaseUrl, limit });
           break;
         }
         usage();
