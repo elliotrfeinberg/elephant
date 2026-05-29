@@ -1,50 +1,18 @@
-// Players list — backed by the perf-ratings JSON (real crawl data).
+// Players directory — backed by Postgres (players + player_year_ratings).
 //
-// Replaces the earlier fixture-based listing. Each row links to a
-// player detail page (rating sparkline + full match log).
+// Phase-1 data: per-year published NTRP band + rating type. Computed perf
+// ratings and match history land later (phase-2). Filtering, sorting, and
+// band tallies run in SQL so the full ~20k-player section stays fast.
 
 import Link from "next/link";
-import {
-  loadPerfRatings,
-  playerSlug,
-  type PerfRatingEntry,
-} from "@/lib/perfRatings";
+import { listPlayers, ratingTypeLabel, type PlayerRow } from "@/lib/players";
 
-type SortKey = "perf" | "name" | "matches";
+type SortKey = "name" | "band";
 
-function parseParams(p: { sort?: string; q?: string; band?: string }) {
-  const sort: SortKey =
-    p.sort === "name" || p.sort === "matches" ? p.sort : "perf";
-  const q = (p.q ?? "").trim().toLowerCase();
-  const band = p.band?.trim() ?? "";
-  return { sort, q, band };
-}
-
-function displayRating(e: PerfRatingEntry): number | null {
-  return e.perfRating;
-}
-
-function filterAndSort(
-  entries: PerfRatingEntry[],
-  q: string,
-  band: string,
-  sort: SortKey
-): PerfRatingEntry[] {
-  const filtered = entries.filter((e) => {
-    if (q && !(e.name ?? "").toLowerCase().includes(q)) return false;
-    if (band) {
-      if (e.ntrpLabel === undefined) return false;
-      if (String(e.ntrpLabel) !== band) return false;
-    }
-    return true;
-  });
-  if (sort === "perf")
-    filtered.sort((a, b) => (displayRating(b) ?? 0) - (displayRating(a) ?? 0));
-  else if (sort === "matches") filtered.sort((a, b) => b.matches - a.matches);
-  else {
-    filtered.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
-  }
-  return filtered;
+function yearsIn(rows: PlayerRow[]): number[] {
+  const ys = new Set<number>();
+  for (const r of rows) for (const b of r.bands) ys.add(b.year);
+  return [...ys].sort((a, b) => a - b);
 }
 
 export default async function PlayersPage({
@@ -52,13 +20,15 @@ export default async function PlayersPage({
 }: {
   searchParams: Promise<{ sort?: string; q?: string; band?: string }>;
 }) {
-  const params = await searchParams;
-  const { sort, q, band } = parseParams(params);
+  const p = await searchParams;
+  const sort: SortKey = p.sort === "band" ? "band" : "name";
+  const q = (p.q ?? "").trim();
+  const band = p.band?.trim() ?? "";
 
   let data;
   let loadError: string | undefined;
   try {
-    data = await loadPerfRatings();
+    data = await listPlayers({ q, band, sort, limit: 200 });
   } catch (err) {
     loadError = err instanceof Error ? err.message : String(err);
   }
@@ -67,37 +37,33 @@ export default async function PlayersPage({
       <div className="space-y-4">
         <h1 className="text-2xl font-bold">Players</h1>
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <p className="font-medium">No perf-ratings JSON found.</p>
+          <p className="font-medium">Couldn’t reach the database.</p>
           <p className="mt-2">
-            Run{" "}
-            <code className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-xs">
-              pnpm dev ratings fit ... --model perf
-            </code>{" "}
-            in <code>apps/worker</code>, then refresh.
+            Make sure Postgres is up (<code>docker compose up -d</code>) and{" "}
+            <code>DATABASE_URL</code> is set in{" "}
+            <code>apps/web/.env.local</code>.
           </p>
-          {loadError && <p className="mt-2 text-xs text-amber-700">{loadError}</p>}
+          {loadError && (
+            <p className="mt-2 text-xs text-amber-700">{loadError}</p>
+          )}
         </div>
       </div>
     );
   }
 
-  const sorted = filterAndSort(data.entries, q, band, sort);
-
-  const bandCounts = new Map<number, number>();
-  for (const e of data.entries) {
-    if (e.ntrpLabel === undefined) continue;
-    bandCounts.set(e.ntrpLabel, (bandCounts.get(e.ntrpLabel) ?? 0) + 1);
-  }
-  const bandsSorted = [...bandCounts.entries()].sort((a, b) => a[0] - b[0]);
+  const years = yearsIn(data.rows);
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Players</h1>
         <p className="text-sm text-stone-600">
-          {data.entries.length} players from the real crawl. USTA-style
-          performance ratings on the NTRP scale. Click a name to see their
-          rating history and match log.
+          <span className="font-mono">{data.total.toLocaleString()}</span> NorCal
+          players from the published NTRP rating search. Showing{" "}
+          <span className="font-mono">{data.shown}</span>
+          {data.total > data.shown ? " — refine with search" : ""}. Per-season
+          roster bands shown; performance ratings &amp; match history populate
+          after match ingestion.
         </p>
       </div>
 
@@ -122,31 +88,33 @@ export default async function PlayersPage({
             defaultValue={sort}
             className="mt-1 w-44 rounded border border-stone-300 bg-white px-2 py-1.5 text-sm"
           >
-            <option value="perf">Perf rating (high → low)</option>
-            <option value="matches">Match count</option>
             <option value="name">Name (A → Z)</option>
+            <option value="band">Roster band (high → low)</option>
           </select>
         </label>
-        <div className="flex flex-col text-xs text-stone-600">
-          Band filter
-          <div className="mt-1 flex flex-wrap gap-1">
-            <BandChip currentBand={band} value="" label="all" />
-            {bandsSorted.map(([lvl, n]) => (
-              <BandChip
-                key={lvl}
-                currentBand={band}
-                value={String(lvl)}
-                label={`${lvl} (${n})`}
-              />
-            ))}
-          </div>
-        </div>
+        {band && <input type="hidden" name="band" value={band} />}
         <button
           type="submit"
           className="rounded bg-court-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-court-900"
         >
           Apply
         </button>
+        <div className="flex flex-col text-xs text-stone-600">
+          Band filter
+          <div className="mt-1 flex flex-wrap gap-1">
+            <BandChip current={band} value="" q={q} sort={sort} label="all" />
+            {data.bandCounts.map((b) => (
+              <BandChip
+                key={b.band}
+                current={band}
+                value={String(b.band)}
+                q={q}
+                sort={sort}
+                label={`${b.band.toFixed(1)} (${b.count})`}
+              />
+            ))}
+          </div>
+        </div>
       </form>
 
       <div className="overflow-hidden rounded-lg border border-stone-200 bg-white">
@@ -154,45 +122,57 @@ export default async function PlayersPage({
           <thead className="bg-stone-50 text-left text-xs uppercase tracking-wide text-stone-500">
             <tr>
               <th className="px-3 py-2">Player</th>
-              <th className="px-3 py-2">Teams</th>
-              <th className="px-3 py-2 text-right">Roster band</th>
-              <th className="px-3 py-2 text-right">Perf NTRP</th>
-              <th className="px-3 py-2 text-right">Matches</th>
+              <th className="px-3 py-2">Gender</th>
+              {years.map((y) => (
+                <th key={y} className="px-3 py-2 text-right">
+                  {y} band
+                </th>
+              ))}
+              <th className="px-3 py-2">Latest type</th>
             </tr>
           </thead>
           <tbody>
-            {sorted.map((p) => (
-              <tr key={p.key} className="border-t border-stone-100">
-                <td className="px-3 py-2">
-                  <Link
-                    href={`/players/${playerSlug(p.key)}` as `/players/${string}`}
-                    className="font-medium text-court-700 hover:underline"
-                  >
-                    {p.name ?? "(no name)"}
-                  </Link>
-                </td>
-                <td className="px-3 py-2 text-xs text-stone-500">
-                  {p.teams.join(", ") || "—"}
-                </td>
-                <td className="px-3 py-2 text-right font-mono text-stone-600">
-                  {p.ntrpLabel !== undefined ? p.ntrpLabel.toFixed(1) : "—"}
-                </td>
-                <td className="px-3 py-2 text-right font-mono">
-                  {displayRating(p) !== null
-                    ? displayRating(p)!.toFixed(2)
-                    : "—"}
-                  {p.adultRating === null && p.mixedRating !== null && (
-                    <span className="ml-1 text-xs text-stone-400">M</span>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-right font-mono text-stone-600">
-                  {p.matches}
-                </td>
-              </tr>
-            ))}
-            {sorted.length === 0 && (
+            {data.rows.map((pl) => {
+              const latestType =
+                pl.bands.length > 0
+                  ? pl.bands[pl.bands.length - 1]!.ratingType
+                  : null;
+              return (
+                <tr key={pl.id} className="border-t border-stone-100">
+                  <td className="px-3 py-2">
+                    <Link
+                      href={`/players/${pl.id}` as `/players/${string}`}
+                      className="font-medium text-court-700 hover:underline"
+                    >
+                      {pl.name}
+                    </Link>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-stone-500">
+                    {pl.gender ?? "—"}
+                  </td>
+                  {years.map((y) => {
+                    const b = pl.bands.find((x) => x.year === y);
+                    return (
+                      <td
+                        key={y}
+                        className="px-3 py-2 text-right font-mono text-stone-700"
+                      >
+                        {b && b.ntrp !== null ? b.ntrp.toFixed(1) : "—"}
+                      </td>
+                    );
+                  })}
+                  <td className="px-3 py-2 text-xs text-stone-500">
+                    {ratingTypeLabel(latestType)}
+                  </td>
+                </tr>
+              );
+            })}
+            {data.rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-8 text-center text-stone-400">
+                <td
+                  colSpan={3 + years.length}
+                  className="px-3 py-8 text-center text-stone-400"
+                >
                   No players match the filters.
                 </td>
               </tr>
@@ -205,21 +185,26 @@ export default async function PlayersPage({
 }
 
 function BandChip({
-  currentBand,
+  current,
   value,
+  q,
+  sort,
   label,
 }: {
-  currentBand: string;
+  current: string;
   value: string;
+  q: string;
+  sort: string;
   label: string;
 }) {
-  const active = currentBand === value;
+  const active = current === value;
+  const query: Record<string, string> = {};
+  if (q) query.q = q;
+  if (sort) query.sort = sort;
+  if (value) query.band = value;
   return (
     <Link
-      href={{
-        pathname: "/players",
-        query: value ? { band: value } : undefined,
-      }}
+      href={{ pathname: "/players", query }}
       className={`rounded px-2 py-0.5 text-xs ${
         active
           ? "bg-court-700 text-white"

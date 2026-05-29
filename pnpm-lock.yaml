@@ -29,6 +29,9 @@ importers:
       '@tennis/ratings':
         specifier: workspace:*
         version: link:../../packages/ratings
+      drizzle-orm:
+        specifier: ^0.36.4
+        version: 0.36.4(@types/react@19.2.15)(postgres@3.4.9)(react@19.2.6)
       next:
         specifier: ^15.1.3
         version: 15.5.18(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
