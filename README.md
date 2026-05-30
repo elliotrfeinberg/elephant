@@ -141,6 +141,41 @@ pnpm --filter @tennis/db migrate     # apply migrations
 pnpm --filter @tennis/db studio      # browse the db
 ```
 
+### Data pipeline
+
+Getting match data into the system is a four-stage pipeline. All stages read
+`DATABASE_URL`; crawl stages also need `TENNIS_CONTACT_EMAIL` (and a logged-in
+bot account under `~/.tennis-platform/`).
+
+```bash
+export DATABASE_URL="postgres://tennis:tennis@localhost:5432/tennis"
+export TENNIS_CONTACT_EMAIL="you@example.com"
+
+# 1. Discover flights + scrape their Match Summaries into the catalog.
+pnpm --filter @tennis/worker dev db enumerate-flights --years 2025,2026
+# 2. Fetch per-match scorecards (the slow, rate-limited step). --due restricts
+#    to matches whose date has passed; --shard i/N parallelizes across accounts.
+pnpm --filter @tennis/worker dev db backfill-scorecards-db --year 2026 --due
+# 3. Normalize staged scorecards → relational tables (team/court matches).
+pnpm --filter @tennis/worker dev db normalize-matches
+# 4. Compute perf ratings and write them to the rating tables.
+pnpm --filter @tennis/worker dev db compute-ratings --persist
+```
+
+**Refresh ratings from partial data (no full crawl needed).** Stages 3–4 only
+*read* the staged scorecards, so they're safe to run anytime — even while a
+backfill (stage 2) is still running — to surface what's been fetched so far:
+
+```bash
+pnpm --filter @tennis/worker dev db normalize-matches
+pnpm --filter @tennis/worker dev db compute-ratings --persist
+```
+
+`compute-ratings --persist` is a full replace (it clears and rewrites the rating
+tables), so re-running it is idempotent. For a **scheduled** delta crawl that
+chains stages 2–4 automatically, use `db incremental` — see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 ## Project memory
 
 Claude Code sessions on this project share a small memory file at

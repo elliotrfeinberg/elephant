@@ -265,7 +265,10 @@ export async function computeRatingsFromDb(opts: {
       }
     }
     await inChunks(mrRows, 500, async (chunk) => {
-      await db.insert(perfMatchResults).values(chunk);
+      // onConflictDoNothing guards against the rare malformed scorecard where
+      // the same player is parsed into both slots of a doubles court (→ two
+      // history entries with the same (player_id, court_match_id)). Keep one.
+      await db.insert(perfMatchResults).values(chunk).onConflictDoNothing();
     });
     console.error(
       `\nPersisted ${prRows.length} player_perf_ratings + ${mrRows.length} perf_match_results.`
