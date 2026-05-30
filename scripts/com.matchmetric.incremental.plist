@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS launchd job: run the daily incremental crawl locally (Stage 0 of
+  docs/DEPLOYMENT.md). Native alternative to crontab on a Mac that sleeps.
+
+  INSTALL (edit the two absolute paths below to your checkout first):
+    cp scripts/com.matchmetric.incremental.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.matchmetric.incremental.plist
+
+  RUN NOW (test):   launchctl start com.matchmetric.incremental
+  LOGS:             tail -f /tmp/matchmetric-incremental.log
+  UNINSTALL:        launchctl unload -w ~/Library/LaunchAgents/com.matchmetric.incremental.plist
+
+  Notes:
+    - Runs daily at 06:00. If the Mac is asleep at 06:00, launchd runs the job
+      at the next wake (unlike cron, which skips it) — good for a laptop.
+    - DATABASE_URL (Neon direct url) + TENNIS_CONTACT_EMAIL are read from
+      <repo>/.env by incremental.sh, so no secrets live in this plist.
+    - Update --year each new league season (2026 -> 2027 -> ...).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.matchmetric.incremental</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <!-- EDIT: absolute path to your checkout -->
+        <string>/Users/elliotfeinberg/tennis-platform/scripts/incremental.sh</string>
+        <string>--year</string>
+        <string>2026</string>
+    </array>
+
+    <!-- EDIT: absolute path to your checkout -->
+    <key>WorkingDirectory</key>
+    <string>/Users/elliotfeinberg/tennis-platform</string>
+
+    <!-- Give launchd a usable PATH so node/Playwright resolve. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/matchmetric-incremental.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/matchmetric-incremental.log</string>
+
+    <!-- Don't relaunch on exit; this is a scheduled batch job, not a daemon. -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
