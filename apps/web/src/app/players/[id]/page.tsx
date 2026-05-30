@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { Profile, type ProfileData, type ProfileLogRow } from "@/components/mm/screens/Profile";
 import { findPlayer, confidenceFromMatches } from "@/lib/players";
 import type { Named } from "@/lib/demo";
-import type { ChartPoint } from "@/components/mm/RatingChart";
+import type { ChartPoint, ChartSeries } from "@/components/mm/RatingChart";
 
 const SECTION = "USTA / NorCal";
 const isoDate = (d: Date | null): string =>
@@ -41,33 +41,42 @@ export default async function Page({
     post: m.postRating,
   }));
 
-  const series: ChartPoint[] = p.matchLog
-    .filter((m) => m.affectsRating && m.postRating != null && m.playedOn)
-    .map((m) => ({
-      date: isoDate(m.playedOn),
-      post: m.postRating!,
-      won: m.won,
-      kind: m.kind,
-      line: m.line,
-      opp: m.opponents.map((o) => [o.name, o.rating ?? 0] as Named),
-      partner: m.partners[0]
-        ? ([m.partners[0].name, m.partners[0].rating ?? 0] as Named)
-        : undefined,
-      sets: m.sets.map((s) => [s.player, s.opponent] as [number, number]),
-    }));
+  // One line per category — Adult and Mixed are independent NTRP rating tracks.
+  // Combo/Tri-Level/etc. don't affect either rating, so they're already excluded
+  // by the affectsRating filter; the remainder is adult- or mixed-track.
+  const mkPoint = (m: (typeof p.matchLog)[number]): ChartPoint => ({
+    date: isoDate(m.playedOn),
+    post: m.postRating!,
+    won: m.won,
+    kind: m.kind,
+    line: m.line,
+    opp: m.opponents.map((o) => [o.name, o.rating ?? 0] as Named),
+    partner: m.partners[0]
+      ? ([m.partners[0].name, m.partners[0].rating ?? 0] as Named)
+      : undefined,
+    sets: m.sets.map((s) => [s.player, s.opponent] as [number, number]),
+  });
+  const rated = p.matchLog.filter(
+    (m) => m.affectsRating && m.postRating != null && m.playedOn
+  );
+  const series: ChartSeries[] = [
+    { key: "adult", label: "Adult", color: "var(--court)", points: rated.filter((m) => m.category !== "mixed").map(mkPoint) },
+    { key: "mixed", label: "Mixed", color: "var(--ball)", points: rated.filter((m) => m.category === "mixed").map(mkPoint) },
+  ].filter((s) => s.points.length > 0);
 
   // Record (courts won) across the full match log.
   const w = p.matchLog.filter((m) => m.won).length;
   const l = p.matchLog.length - w;
 
-  // 30-day trend from the rating series: latest post vs the post ~30 days prior.
+  // 30-day trend off the player's primary (most-played) rating track: latest
+  // post vs the post ~30 days prior. (Per-track so adult/mixed don't interleave.)
+  const primary = [...series].sort((a, b) => b.points.length - a.points.length)[0]?.points ?? [];
   let trend30: number | null = null;
-  if (series.length >= 2) {
-    const last = series[series.length - 1]!;
-    const lastT = new Date(last.date).getTime();
-    const cutoff = lastT - 30 * 24 * 3600 * 1000;
-    const prior = [...series].reverse().find((s) => new Date(s.date).getTime() <= cutoff);
-    const base = prior ?? series[0]!;
+  if (primary.length >= 2) {
+    const last = primary[primary.length - 1]!;
+    const cutoff = new Date(last.date).getTime() - 30 * 24 * 3600 * 1000;
+    const prior = [...primary].reverse().find((s) => new Date(s.date).getTime() <= cutoff);
+    const base = prior ?? primary[0]!;
     trend30 = Math.round((last.post - base.post) * 100) / 100;
   }
 

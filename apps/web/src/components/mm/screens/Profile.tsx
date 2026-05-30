@@ -3,7 +3,7 @@
 // mapped in the server page); falls back to demo data when no data is passed.
 import Link from "next/link";
 import { TrendArrow } from "@/components/mm/ui";
-import { RatingChart, type ChartPoint } from "@/components/mm/RatingChart";
+import { RatingChart, type ChartSeries } from "@/components/mm/RatingChart";
 import { fmtDate, score, type Named } from "@/lib/demo";
 import * as DEMO from "@/lib/demo";
 
@@ -22,7 +22,7 @@ export interface ProfileData {
   record: { w: number; l: number };
   trend30: number | null; confidence: string;
   rankLabel: string;
-  series: ChartPoint[];
+  series: ChartSeries[];
   log: ProfileLogRow[];
   bands: Array<{ year: number; ntrp: number | null; type: string | null }>;
 }
@@ -34,7 +34,14 @@ function demoData(): ProfileData {
     band: p.band, bandLow: p.bandLow, bandHigh: p.bandHigh, midpoint: p.midpoint,
     perf: p.perf, adult: p.adult, mixed: p.mixed, adultMatches: p.adultMatches, mixedMatches: p.mixedMatches,
     record: p.record, trend30: p.trend30, confidence: p.confidence, rankLabel: "#" + p.rank.pos,
-    series: DEMO.log.filter((m) => m.post != null).map((m) => ({ date: m.date, post: m.post, won: m.won, kind: m.kind, line: m.line, opp: m.opp, partner: m.partner, sets: m.sets })),
+    series: (() => {
+      const mk = (m: (typeof DEMO.log)[number]) => ({ date: m.date, post: m.post as number, won: m.won, kind: m.kind, line: m.line, opp: m.opp, partner: m.partner, sets: m.sets });
+      const rated = DEMO.log.filter((m) => m.post != null);
+      return [
+        { key: "adult", label: "Adult", color: "var(--court)", points: rated.filter((m) => m.cat !== "mixed").map(mk) },
+        { key: "mixed", label: "Mixed", color: "var(--ball)", points: rated.filter((m) => m.cat === "mixed").map(mk) },
+      ].filter((s) => s.points.length > 0);
+    })(),
     log: DEMO.log.map((m) => ({ date: m.date, cat: m.cat, kind: m.kind, line: m.line, opp: m.opp, oppTeam: m.oppTeam, partner: m.partner, won: m.won, sets: m.sets, perf: m.perf, post: m.post })),
     bands: DEMO.bands,
   };
