@@ -215,7 +215,7 @@ function MatchLog({ d }: { d: ProfileData }) {
                   <span style={{ color: "var(--ink-2)" }}>{score(m.sets)}</span>
                 </td>
                 <td className="mm-mono" style={{ ...cell, textAlign: "right", color: "var(--ink-2)" }}>{m.perf.toFixed(2)}</td>
-                <td className="mm-num" style={{ ...cell, textAlign: "right", fontSize: 15, color: "var(--court)" }}>{m.post != null ? m.post.toFixed(2) : "—"}</td>
+                <td className="mm-num" style={{ ...cell, textAlign: "right", fontSize: 15, color: m.cat === "mixed" ? "var(--ball-ink)" : "var(--court)" }}>{m.post != null ? m.post.toFixed(2) : "—"}</td>
               </tr>
             ))}
           </tbody>
